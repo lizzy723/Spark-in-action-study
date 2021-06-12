@@ -175,7 +175,69 @@ pig, sqoop → 스파크 코어, 스파크 SQL
 
 ### Appendix
 <details close>
-<summary>A. Installing Apache Spark</summary>
+<summary><b>A. Installing Apache Spark</b></summary>
+  
+1. 자바(JDK) 설치
+    - 자바가 설치되어 있는지 확인하기: `which javac`
+    (이 명령은 javac 명령을 실행했을 때 실제로 호출될 실행 파일 위치를 반환한다.)
+    - (만약 자바가 설치되어 있다면)JAVA_HOME 환경 변수가 올바르게 설정되어 있는지 확인해본다.
+
+        ```bash
+        #환경 변수 설정되어 있는지 확인
+        $echo $JAVA_HOME #open-jdk 설치 폴더
+
+        #환경 변수 설정
+        $echo "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64" | sudo tee /etc/profile.d/sia.sh
+        $source /etc/profile.d/sia.sh 
+        ```
+
+    - (만약 자바가 설치되어 있지 않다면)JDK 설치하기:  `sudo apt-get -y install openjdk-8-jdk`
+2. 아파치 스파크 내려받고 설치 및 설정
+    - 스파크 내려받기 페이지([http://spark.apache.org/downloads.html](http://spark.apache.org/downloads.html))에서 <br>
+    (1) 최신 스파크 릴리스 선택(Choose a Spark release),<br>
+    (2) 최신 하둡 버전으로 빌드된 패키지 유형 선택(Choose a package type),<br>
+    (3) 스파크 다운로드(Download Spark)<br>
+    아파치 미러의 목록이 나오면 가장 상위에 추천된 미러 사이트를 클릭한다.
+    - 압축 풀고 설치: 리눅스의 표준 규칙에 따라 사용자 홈 디렉토리 아래의 bin 디렉토리를 스파크 바이너리 위치로 사용한다. 홈 디렉토리에는 전체 권한(읽기, 쓰기, 실행)이 부여되므로 매번 sudo를 입력할 필요가 없다.
+
+        ```bash
+        $cd $HOME/Downloads
+        $tar -xvf spark*
+        $rm spark*tgz
+
+        ##홈디렉토리 아래의 bin 디렉토리로 스파크 바이너리 옮기기
+        $cd $HOME
+        $mkdir -p ~/bin/sparks
+        $mv Downloads/spark-* bin/sparks
+        ```
+
+    - 여러 버전의 스파크를 사용할 경우 bin 디렉토리 아래에 sparks 디렉토리를 생성하고 이 안에 스파크의 현재 및 미래 버전을 모두 저장하자. 그리고 현재 사용할 버전에 심볼릭 링크를 만들자.
+
+        ```bash
+        $cd $HOME/bin
+        $ln -s sparks/spark-2.0.0-bin-hadoop2.7 spark
+        $tree -L 2 #심볼릭 링크 확인. 여기서 spark 폴더는 sparks 폴더 내의 다른 폴더를 가리키는 심볼릭 링크를 가리킨다. 
+
+        #심볼릭 링크 바꾸기
+        $rm spark
+        $ln -s spark-1.6.1-bin-hadoop2.6 spark
+        ```
+
+3. 스파크 셸
+    - 스파크 셸 시작하기
+
+        ```bash
+        $cd $HOME/bin/spark
+        $./bin/spark-shell 
+        ```
+
+    - 로깅레벨 변경하기: 스파크의 LOG4J 설정을 변경해 스파크 셸에는 오류 로그만 출력하고, 나머지 로그는 추후 문제 진단에 사용할 수 있도록 스파크 루트 폴더 아래의 logs/info.log 파일에 저장해보자.
+
+        ```bash
+        $gedit conf/log4j.properties  #스파크의 conf 디렉터리 아래에 log4j.properites 파일을 생성. log4j.properties 파일은 ch2 참조
+        ```
+    - 스파크 REPL(=스파크 셸)은 스파크 컨텍스트와 SparkSession 객체를 각각 sc와 spark라는 변수로 제공한다. 스파크 애플리케이션은 SparkSession을 통해 스파크에 접속하고 세션 설정, 작업 실행 관리, 파일 읽기 및 쓰기 작업 등을 수행할 수 있다. 스파크 REPL에 spark.까지만 입력하고 tab을 누르면 SparkSession이 제공하는 모든 함수를 볼 수 있다.
+    - 파이썬 셸로 spark를 시작하는 경우: `$pyspark`
 </details>
 <details close>
   <summary><b>B. Understanding MapReduce</b></summary>
