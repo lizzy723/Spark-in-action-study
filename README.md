@@ -154,9 +154,40 @@ pig, sqoop → 스파크 코어, 스파크 SQL
   <br><blockquote>
   <details close>
   <summary>2.1. Using the spark-in-action VM</summary>
+    
+```bash
+$ vagrant up #가상 머신 시작
+$ vagrant ssh -- -l spark #ssh 로그인
+
+$ git clone https://github.com/spark-in-action/first-edition #github repository clone
+```
+
+cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /user` (/user 폴더내 list 출력) → [http://hadoop.apache.org/docs/current/hadoop-project-dist/hadoop-common/FileSystemShell.html](http://hadoop.apache.org/docs/current/hadoop-project-dist/hadoop-common/FileSystemShell.html) 참고하기
   </details>
   <details close>
   <summary>2.2. Using Spark shell and writing your first Spark program</summary>
+
+- license 파일을 읽어들이고, 이 파일에 포함된 BSD 문자열의 수를 세보자.
+
+    ```python
+    #license 파일을 읽기
+    licLines = sc.textFile("/usr/local/spark/LICENSE")
+    lineCnt = licLines.count()
+
+    #BSD 문자열 필터링
+    bsdLines = licLines.filter(lambda line: "BSD" in line)
+    bsdLines.count()
+
+    #BSD 문자열 출력
+    bsdLines.foreach(lambda bLine: print(bLine))
+    ```
+
+- RDD의 개념: RDD는 스파크의 기본 추상화 객체로 다음과 같은 성질이 있다.
+    - **불변성(immutable)**: 읽기 전용
+    → RDD는 데이터를 조작할 수 있는 다양한 변환 연산자를 제공하지만, 변환 연산자는 항상 새로운 RDD를 생성한다.
+    - **복원성(resilient)**: 장애 내성
+    - **분산(distributed):** 노드 한개 이상에 저장된 데이터셋
+- **RDD lineage**: 앞의 예제에서 LICENSE 파일을 로드해 `licLines` RDD를 생성했다. 그 다음 `licLines` RDD에 `filter` 함수를 적용해 새로운 `bsdLines` RDD를 생성했다. 이처럼 RDD에 적용된 변환 연산자와 그 적용 순서를 RDD lineage라고 한다.
   </details>
   <details close>
   <summary>2.3. Basic RDD actions and transformations</summary>
@@ -166,6 +197,19 @@ pig, sqoop → 스파크 코어, 스파크 SQL
   </details></blockquote>
 </details>
 
+<details close>
+<summary><b>chapter 3</b> Writing spark application</summary>
+  <br><blockquote>
+  <details close>
+  <summary>3.1. Generating a new Spark project in Eclipse</summary>
+  </details>
+  <details close>
+  <summary>3.2. Developing the application</summary>
+  </details>
+  <details close>
+  <summary>3.3. Submitting the application</summary>
+  </details></blockquote>
+</details>
 
 ## 2장 meet the spark family
 
@@ -218,7 +262,7 @@ pig, sqoop → 스파크 코어, 스파크 SQL
         $ln -s sparks/spark-2.0.0-bin-hadoop2.7 spark
         $tree -L 2 #심볼릭 링크 확인. 여기서 spark 폴더는 sparks 폴더 내의 다른 폴더를 가리키는 심볼릭 링크를 가리킨다. 
 
-        #심볼릭 링크 바꾸기
+        #심볼릭 링크 바꾸기(기존의 심볼릭 링크 지우고, 새로 심볼릭 링크 만들기)
         $rm spark
         $ln -s spark-1.6.1-bin-hadoop2.6 spark
         ```
