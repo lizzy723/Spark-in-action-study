@@ -190,10 +190,103 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
 - **RDD lineage**: 앞의 예제에서 LICENSE 파일을 로드해 `licLines` RDD를 생성했다. 그 다음 `licLines` RDD에 `filter` 함수를 적용해 새로운 `bsdLines` RDD를 생성했다. 이처럼 RDD에 적용된 변환 연산자와 그 적용 순서를 RDD lineage라고 한다.
   </details>
   <details close>
-  <summary>2.3. Basic RDD actions and transformations</summary>
+  <summary>2.3. Basic RDD actions and transformations</summary><br>
+    
+1. **transformation**: RDD를 조작해 새로운 RDD를 생성한다. e.g. filter, map
+2. **actions**: 계산 결과를 반환하거나 RDD 요소에 특정 작업을 수행하려고 실제 계산을 시작하는 역할을 한다. e.g. count, foreach, collect, first
+
+> 변환 연산자의 **지연 실행(lazy evaluation)**: 변환 연산자의 지연 실행은 행동 연산자를 호출하기 전까지는 변환 연산자의 계산을 실제로 실행하지 않는 것을 의미한다. RDD에 행동 연산자가 호출되면 스파크는 해당 RDD의 lineage를 살펴보고, 이를 바탕으로 실행해야 하는 연산 그래프를 작성해서 행동 연산자를 계산한다.  **결국 변환 연산자는 행동 연산자를 호출했을때 무슨 연산이 어떤 순서로 실행되어야 할지 알려주는 일종의 설계도라고 할 수 있다.** 
+
+---
+
+- **`map`**: RDD의 모든 요소에 임의의 함수를 적용할 수 있는 변환 연산자.
+
+    ```python
+    numbers = sc.parallelize(range(10, 51, 10))  #numbers = sc.makeRDD(range(10, 51, 10))도 가능.
+    numbers.foreach(lambda x: print(x))
+    numbersSquared = numbers.map(lambda num: num * num)
+    numbersSquared.foreach(lambda x: print(x))
+    ```
+
+    `parallelize`는 sequential 객체를 받아 이 sequential 객체의 요소로 구성된 새로운 RDD를 만든다. 이 과정에서 sequential 객체의 요소는 여러 스파크의 executor로 **분산**된다. 
+    (→ `print`결과를 보면 sequential 하지 않다. )
+
+    ```python
+    reversed = numbersSquared.map(lambda x: str(x)[::-1])
+    reversed.foreach(lambda x: print(x))
+    ```
+
+- **`distinct`** and **`flatMap`**
+
+    ```
+    ##client-ids.log
+    15,16,20,20
+    77,80,94
+    94,98,16,31
+    31,15,20
+    ```
+
+    `flatMap`(주어진 모든 요소에 대해 연산을 진행하고, 반환한 배열의 중첩구조를 한 단계 제거하고 모든 요소를 단일 컬렉션으로 병합한다. )을 사용하면 각 요소별로 split을 진행한 결과를 하나의 array로 반환한다. 
+
+    ```python
+    lines = sc.textFile("Downloads/client-ids.log")
+
+    ids = lines.flatMap(lambda x: x.split(","))
+    ids.collect()   #리스트를 반환한다. 
+    ids.first()
+
+    intIds = ids.map(lambda x: int(x))
+    intIds.collect()
+
+    uniqueIds = intIds.distinct()
+    uniqueIds.collect()
+    finalCount  = uniqueIds.count()
+    finalCount  #8
+    ```
+
+- **`sample`**, **`take`**, **`takeSample`** 연산으로 RDD 일부 요소 가져오기: `sample`은 변환연산자(transformation)이지만, `take`와 `takeSample`은 행동연산자(Actions)이다.
+
+    ```python
+    ##비복원 샘플링
+    s = uniqueIds.sample(False, 0.3)  #withReplacement=False
+    s.count()
+    s.collect()
+
+    ##복원 샘플링
+    swr = uniqueIds.sample(True, 0.5)
+    swr.count
+    swr.collect()
+
+    #확률값대신 정확한 개수로 RDD 요소 샘플링하기
+    taken = uniqueIds.takeSample(False, 5)  #list 반환
+    uniqueIds.take(3)
+    ```
+
+    `take`는 지정된 개수의 요소를 모을 때까지 RDD의 파티션을 하나씩 처리해 결과를 반환한다. → 결국 연산이 전혀 분산되지 않는다는 의미이다. 여러 파티션의 요소를 빠르게 가져오고 싶다면 드라이버의 메모리를 넘지 않도록 요소 개수를 적당히 줄이고 `collect` 연산자를 사용하자.
   </details>
   <details close>
   <summary>2.4. Double RDD functions</summary>
+    
+* Double(cf. float) 객체만 사용해서 RDD를 구성하면 implicit conversion을 통해 몇 가지 추가 함수를 사용할 수 있다.
+
+    ```python
+    intIds.mean()
+    intIds.sum()
+
+    intIds.stats()
+    intIds.variance()
+    intIds.stdev()
+
+    intIds.histogram([1.0, 50.0, 100.0])  #1과 50사이에 몇개, 50과 100사이에 몇개가 있는지 반환
+    intIds.histogram(3)  #3개의 경계로 나눴을때 (1) 경계값과, (2) 구간에 존재하는 sample의 수를 반환한다. 
+    ```
+
+* 근사 합계 및 평균계산: 지정된 제한시간 동안 근사합계 또는 근사 평균을 계산한다. 제한시간을 인자로 넣어준다.
+
+    ```python
+    intIds.sumApprox(1)
+    intIds.meanApprox(1)
+    ```
   </details></blockquote>
 </details>
 
