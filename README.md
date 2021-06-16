@@ -289,18 +289,137 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     ```
   </details></blockquote>
 </details>
-
+  
 <details close>
 <summary><b>chapter 3</b> Writing spark application</summary>
   <br><blockquote>
   <details close>
-  <summary>3.1. Generating a new Spark project in Eclipse</summary>
+  <summary>3.1. Generating a new Spark project in Eclipse</summary
+
+<br>Eclipse 대신 pycharm 사용하기
   </details>
   <details close>
-  <summary>3.2. Developing the application</summary>
+  <summary>3.2. Developing the application</summary><br>
+    
+**[예제] 한 게임 회사의 모든 직원 명단과 각 직원이 수행한 푸시 횟수를 담은 일일 리포트를 개발해보자.**
+
+1. 데이터셋 준비
+
+    ```bash
+    $ mkdir -p $HOME/sia/github-archive
+    $ cd $HOME/sia/github-archive
+    $ wget http://data.githubarchive.org/2015-03-01-{0..23}.json.gz
+
+    $ gunzip *
+
+    $ head -1 2015-03-01-0.json| jq '.'
+    ```
+    <img width="400" alt="Screen Shot 2021-06-16 at 7 32 50 PM" src="https://user-images.githubusercontent.com/43725183/122204059-a5cf8d80-ced9-11eb-9334-c0b2309e6910.png">
+
+    > actor.login이 "treydock"인 누군가가 2015년 3월 1일 자정(created_at)에 "development "라는 저장소 브랜치를 생성한 기록이다. (깃허브 API 문서 참조: [https://developer.github.com/v3/activity/events/types/](https://developer.github.com/v3/activity/events/types/))
+
+2. JSON 로드: `read.json()` 은 한 줄당 JSON 객체 하나가 저장된 파일을 로드한다. DataFrame 객체를 반환한다. 
+
+    ```python
+    from pyspark.sql import SQLContext
+    import sys
+
+    sqlContext = SQLContext(sc)
+    ghLog = sqlContext.read.json("2015-03-01-0.json")
+    ghLog.printSchema()
+    ghLog.show(5)
+
+    ghLog.count() #17786
+    pushes = ghLog.filter("type = 'PushEvent'")
+    pushes.count()  #8793
+    ```
+    <img width="1000" alt="Screen Shot 2021-06-16 at 7 35 14 PM" src="https://user-images.githubusercontent.com/43725183/122204352-fc3ccc00-ced9-11eb-8404-29866a84399e.png">
+
+3. 데이터 집계: `count`외에도 `min`, `max`, `avg`, `sum` 등의 집계 함수를 제공한다. 
+
+    ```python
+    grouped = pushes.groupBy("actor.login").count()
+    ordered = grouped.orderBy(grouped['count'], ascending=False)
+    ```
+
+4. 분석대상 제외 & 공유변수
+
+    : `broadcast`를 이용해서 **공유변수**를 만들자. 공유변수를 설정하지 않고 이대로 예제 프로그램을 실행하면 스파크는 `employees`를 대략 200회(필터링 작업을 수행할 태스크 개수) 가까이 반복적으로 네트워크에 전송하게 될 것이다. 
+
+    반면 공유변수는 클러스터의 각 노드에 정확히 한 번만 전송한다. 또 공유변수는 클러스터 노드의 메모리에 자동으로 캐시되므로 프로그램 실행 중 바로 접근할 수 있다. 
+
+    ```python
+    employees = [line.rstrip('\n') for line in open(sys.argv[2])]
+    bcEmployees = sc.broadcast(employees)
+
+    def isEmp(user):
+    	return user in bcEmployees.value
+
+    #filter에 사용하기 위해서 user-defined function 등록
+    from pyspark.sql.types import BooleanType
+    sqlContext.udf.register("SetContainsUdf", isEmp, returnType=BooleanType())
+    filtered = ordered.filter("SetContainsUdf(login)")
+    ```
+
+5. 애플리케이션 실행
+
+    ```bash
+    $ python main.py \
+    	../github-archive/2015-03-01-0.json \   #	../github-archive/*.json \
+    	../ch03/ghEmployees.txt
+    ```
+    <img width="200" alt="Screen Shot 2021-06-16 at 7 37 01 PM" src="https://user-images.githubusercontent.com/43725183/122204609-46be4880-ceda-11eb-8628-b179a7dedcfa.png">
+
+    ```python
+    from pyspark import SparkContext, SparkConf
+    from pyspark.sql import SQLContext
+    import sys
+
+    if __name__ == "__main__":
+    	sc = SparkContext(conf=SparkConf())
+    	sqlContext = SQLContext(sc)
+    	ghLog = sqlContext.read.json(sys.argv[1])
+
+    	pushes = ghLog.filter("type = 'PushEvent'")
+    	grouped = pushes.groupBy("actor.login").count()
+    	ordered = grouped.orderBy(grouped['count'], ascending=False)
+
+    	# Broadcast the employees set	
+    	employees = [line.rstrip('\n') for line in open(sys.argv[2])]
+
+    	bcEmployees = sc.broadcast(employees)
+
+    	def isEmp(user):
+    		return user in bcEmployees.value
+
+    	from pyspark.sql.types import BooleanType
+    	sqlContext.udf.register("SetContainsUdf", isEmp, returnType=BooleanType())
+    	filtered = ordered.filter("SetContainsUdf(login)")
+    	filtered.show()
+
+    	#filtered.write.format(sys.argv[4]).save(sys.argv[3])
+    ```
+
   </details>
   <details close>
   <summary>3.3. Submitting the application</summary>
+  </details></blockquote>
+</details>
+  
+<details close>
+<summary><b>chapter 4</b> The spark api in depth</summary>
+  <br><blockquote>
+  <details close>
+  <summary>4.1. Working with pair RDDs</summary>
+  </details>
+  <details close>
+  <summary>4.2. Understanding data partitioning and reducing data shuffling</summary>
+  </details>
+  <details close>
+  <summary>4.3. Joining, sorting, and grouping data</summary>
+  </details>
+  <details close>
+  <summary>4.4. Understanding RDD dependencies</summary>
   </details></blockquote>
 </details>
 
