@@ -24,4 +24,4 @@ if __name__ == "__main__":
 	filtered = ordered.filter("SetContainsUdf(login)")
 	filtered.show()
 
-	# filtered.write.format(sys.argv[4]).save(sys.argv[3])
+	filtered.write.format(sys.argv[4]).save(sys.argv[3])
