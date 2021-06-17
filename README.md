@@ -397,12 +397,43 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     	filtered = ordered.filter("SetContainsUdf(login)")
     	filtered.show()
 
-    	#filtered.write.format(sys.argv[4]).save(sys.argv[3])
+    	filtered.write.format(sys.argv[4]).save(sys.argv[3])
+       #파일 형식에는 JSON, Parquet, JDBC등이 가능하다. 
+       #세번째 인수는 저장 경로를 적어준다. 
     ```
 
   </details>
   <details close>
-  <summary>3.3. Submitting the application</summary>
+  <summary>3.3. Submitting the application</summary><br>
+
+스파크 프로그램을 운영 환경에서 원활하게 실행할 수 있도록 프로그램에 JAR 파일을 추가하는 방법은 (1) `spark-submit` 스크립트의 `—jars` 매개변수에 프로그램에 필요한 JAR 파일을 모두 나열해 실행자로 전송하거나, (2) 모든 의존 라이브러리를 포함하는 `underjar`를 빌드하는 방법이다. 
+
+- uderjar 빌드: 일단은 생략
+- `spark-submit`: 스파크 애플리케이션을 제출하는 일종의 헬퍼 스크립트로 애플리케이션을 스파크 클러스터에서 실행하는데 사용한다.
+
+    ```bash
+    ./bin/spark-submit \
+      --class <main-class> \   #python에서는 사용 x
+      --master <master-url> \
+      --deploy-mode <deploy-mode> \
+      --conf <key>=<value> \
+      ... # other options
+      <application-jar> \
+      [application-arguments]
+    ```
+
+    결과 폴더에 있는 `SUCCESS` 파일은 작업을 성공적으로 완료했음을 의미한다. 각 `crc` 파일은 CRC(Cyclic Redundancy Check)코드를 계산해 각 데이터 파일의 유효성을 검사하는데 사용한다. `._SUCCESS.crc` 파일은 모든 CRC파일을 검사한 결과가 성공적이라는 것을 의미한다.  
+
+    ```bash
+    $ spark-submit \
+    	main.py \
+    	"../github-archive/2015-03-01-0.json" \ 
+    	"../ch03/ghEmployees.txt" \
+    	"emp-gh-push-output" "json"
+    ```
+        
+    <img width="1000" alt="Screen Shot 2021-06-17 at 12 08 30 PM" src="https://user-images.githubusercontent.com/43725183/122324988-bc6ef680-cf64-11eb-946b-4ede59f690a4.png">
+
   </details></blockquote>
 </details>
   
