@@ -441,10 +441,174 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
 <summary><b>chapter 4</b> The spark api in depth</summary>
   <br><blockquote>
   <details close>
-  <summary>4.1. Working with pair RDDs</summary>
+  <summary>4.1. Working with pair RDDs</summary><br>
+    
+키-값 쌍은 전통적으로 연관배열(associative array)이라는 자료구조를 사용해 표현한다. 이 자료구조를 파이썬에서는 dictionary라고 하며, 스칼라와 자바에서는 map이라고 한다. 스파크에서는 키-값 쌍으로 구성된 RDD를 **pair RDD**라고 한다. 스파크의 데이터를 반드시 키-값 쌍 형태로 구성할 필요는 없지만, 실무에서는 Pair RDD를 사용하는 것이 바람직한 경우가 많다. 
+
+- **Pair RDD 생성**: RDD의 keyBy 변환 연산자는 RDD 요소로 키를 생성하는 f 함수를 받고, 각 요소를 (f(요소), 요소)( = **(키, 요소)**) 쌍의 튜플로 매핑한다. 물론 데이터를 2-element 튜플로 직접 변환할 수도 있다. 어떤 방법이든 2-element 튜플로 RDD를 구성하면 **Pair RDD 함수**가 RDD에 자동으로 추가된다.
+
+    ```python
+    tranFile = sc.textFile("ch04/ch04_data_transactions.txt")
+    tranData = tranFile.map(lambda line: line.split("#"))
+    #예제 파일의 각 줄에는 구매 날짜, 시간, 고객 ID, 상품 ID, 구매수량, 구매 금액이 '#'로 구분되어있다. 
+    ```
+    <img width="400" alt="Screen Shot 2021-06-18 at 4 42 12 PM" src="https://user-images.githubusercontent.com/43725183/122525386-24503a80-d054-11eb-996d-d9a75f962093.png">
+
+    ```python
+    #키, 요소 페어 생성
+    transByCust = tranData.map(lambda t: (int(t[2]), t))
+
+    transByCust.keys().distinct().count() #100
+    transByCust.count() #1000
+    #map 함수로 키와 값을 만들어보자. 고객이 총 100명 있다.
+    ```
+
+- **Pair RDD 함수**
+    - 키별 개수 세기(`CountByKey`): ID가 53인 고객이 19번으로 가장 많이 구매했다.
+
+        ```python
+        transByCust.countByKey()
+        cid, purch = sorted(transByCust.countByKey().items(), key= lambda x:-x[1])[0] ##(53, 19)
+
+        #사은품 리스트 추가(가격 = 0)
+        complTrans = [["2015-03-30", "11:59 PM", "53", "4", "1", "0.00"]]
+        ```
+
+    - 단일 키로 값 찾기: `transByCust.lookup(53)` → 53번 고객의 모든 구매 기록을 가져올 수 있다. lookup은 결과 값을 드라이버로 전송하므로 이를 메모리에 적재할 수 있는지 먼저 확인해야 한다.
+        
+        <img width="300" alt="Screen Shot 2021-06-18 at 4 43 00 PM" src="https://user-images.githubusercontent.com/43725183/122525491-3f22af00-d054-11eb-898a-df7f06895a28.png">
+
+ 
+
+    - `mapValues` 변환 연산자로 Pair RDD 값 바꾸기: 25번 상품을 2번 이상 구매한 경우 5% 할인해주자.
+
+        ```python
+        def applyDiscount(tran):
+            if(int(tran[3])==25 and float(tran[4])>1):
+                tran[5] = str(float(tran[5])*0.95)
+            return tran
+
+        transByCust = transByCust.mapValues(lambda t: applyDiscount(t))
+        ```
+
+    - `flapMapValues` 변환 연산자로 키에 값 추가: 81번 다섯 개 이상 구매한 고객에게 사은품으로 70번을 보내야한다. 즉, 해당 고객이 70번 상품을 구매한 것 처럼 `transByCust`에 추가해야한다.
+
+        ```python
+        def addToothbrush(tran):
+            if(int(tran[3]) == 81 and int(tran[4])>4):
+                from copy import copy
+                cloned = copy(tran)
+                cloned[5] = "0.00"
+                cloned[3] = "70"
+                cloned[4] = "1"
+                return [tran, cloned]
+            else:
+                return [tran]
+
+        transByCust = transByCust.flatMapValues(lambda t: addToothbrush(t))
+        transByCust.count()  #1006 -> 6명이 81번 상품을 5개 이상 구매했다.
+        ```
+
+    - `reduceByKey` 또는 `foldByKey` 변환 연산자로 키의 모든 값 병합하기: reduceByKey는 각 키의 모든 값을 동일한 타입의 단일 값으로 변환한다. 이 연산자에는 두 값을 하나로 병합하는 Merge 함수를 전달해야하며, reduceByKey는 각 키별로 값 하나만 남을 때까지 merge 함수를 계속 호출한다. 따라서 merge 함수는 결합법칙을 만족해야한다.
+
+        ```python
+        amounts = transByCust.mapValues(lambda t: float(t[5])) #각 키별로 값만 뽑기 
+        totals = amounts.foldByKey(0, lambda p1, p2: p1 + p2).collect()
+        sorted(totals, key = lambda x:x[1])[-1] #(76, 100049.0)
+
+        #사은품 리스트 추가(가격 = 0)
+        complTrans += [["2015-03-30", "11:59 PM", "76", "63", "1", "0.00"]]
+        #76번 고객이 10만 49달러로 가장 많이 썼다. 
+        ```
+
+        foldByKey는 reduceByKey와 기능은 같지만, merge 함수의 인자 목록 바로 앞에 zeroValue 인자를 담은 또 다른 인자 목록을 추가로 전달해야 한다는 점은 다르다. zeroValue는 반드시 항등원이어야한다. (e.g. 덧셈에서는 0, 곱셈에서는 1)
+
+    - `union`으로 array 추가하기 + 결과 파일 저장하기
+
+        ```python
+        transByCust = transByCust.union(sc.parallelize(complTrans).map(lambda t: (int(t[2]), t)))
+        transByCust.map(lambda t: "#".join(t[1])).saveAsTextFile("ch04/ch04output-transByCust")
+        ```
+
+    - `aggregateByKey`로 키의 모든 값 그루핑: aggregateByKey는 (1) **zeroValue**와 (2) 임의의 V 타입을 가진 값을 또 다른 U 타입으로 변환하는 **변환 함수(Transform)**, (3)변환함수가 변환한 값을 두 개씩 하나로 병합하는 **병합함수(Merge)**가 필요하다.
+
+        ```python
+        prods = transByCust.aggregateByKey([], 
+        		lambda prods, tran: prods + [tran[3]],    #변환함수 -> 각 파티션 별로 요소를 병합
+            lambda prods1, prods2: prods1 + prods2)   #병합함수 -> 최종 결과를 병합
+        prods.collect()
+        #prods에 빈 리스트가 전달되었다.
+        ```
+        <img width="1000" alt="Screen Shot 2021-06-18 at 4 43 31 PM" src="https://user-images.githubusercontent.com/43725183/122525565-52357f00-d054-11eb-8eb7-b7f6cba80cd0.png">
+
   </details>
   <details close>
   <summary>4.2. Understanding data partitioning and reducing data shuffling</summary>
+    
+- **데이터 파티셔닝(data partitioning)**: 데이터를 여러 클러스터 노드로 분할하는 메커니즘을 의미한다. 이 장에서는 일단 스파크 클러스터를 '병렬 연산이 가능하고 네트워크로 연결된 머신(즉, 노드)의 집합'정도로 생각하자.
+    - **파티션(partition)**: 과거에는 파티션 대신 스플릿(split)용어를 사용했다. RDD의 파티션은 RDD 데이터의 일부(조각 또는 슬라이스)를 의미한다. 예를 들어 로컬 파일 시스템에 저장된 텍스트 파일을 스파크에 로드하면, 스파크는 파일 내용을 여러 파티션으로 분할해 클러스터 노드에 고르게 분산 저장한다. 여러 파티션을 노드 하나에 저장할 수도 있다. 이렇게 분산된 파티션이 모여서 RDD 하나를 형성한다.
+    - 파티션의 개수: 해당 RDD에 변환 연산을 실행할 "태스크 개수"와 직결되므로 파티션의 개수는 매우 중요하다. 태스크 개수가 필요 이하로 적으면 클러스터를 충분히 활용할 수 없다. 게다가 각 태스크가 처리할 데이터 분량이 실행자의 메모리 리소스를 초과해 메모리 문제가 발생할 수 있다. 따라서 클러스터의 코어 개수보다 서너 배 더 많은 파티션을 사용하는 것이 좋다.
+    - **데이터 partitioner**: RDD의 데이터 파티셔닝은 RDD의 각 요소에 파티션 번호를 할당하는 partitioner 객체가 수행한다. partitioner는 HashPartitioner, RangePartitioner, 또는 사용자 정의 Partitioner(Pair RDD의 경우)로 구현할 수 있다.
+        - **HashPartitioner**: 스파크의 기본 Partitioner. HashPartitioner는 각 요소의 자바 해시코드를 단순한 mod 공식(partitionIndex = hashCode % numberOfPartitions)에 대입해 파티션 번호를 계산한다. 각 요소의 파티션 번호를 거의 무작위로 결정하기 때문에 모든 파티션을 정확하게 같은 크기로 분할할 가능성이 낮다. 하지만 대규모 데이터셋을 상대적으로 적은 수의 파티션으로 나누면 대체로 데이터를 고르게 분산시킬 수 있다. 
+        (파티션의 기본 개수는 spark.default.parallelism 환경 매개변수 값으로 결정된다)
+        - **RangePartitioner**: 정렬된 RDD의 데이터를 거의 같은 범위 간격으로 분할할 수 있다.
+        - **Pair RDD의 사용자 정의 Partitioner**: 파티션의 데이터를 특정 기준에 따라 정확하게 배치해야 할 경우 사용자 정의 partitioner로 pair RDD를 분할할 수 있다. 
+        (cf. in Python there is no version of aggregateByKey with a custom partitioner)
+    - RDD 파티션 변경
+        - `partitionBy`: PairRDD에서만 사용가능하고, 또 파티셔닝에 사용할 Partitioner 객체만 인자로 전달할 수 있다
+        - `coalesce`와 `repartition`: coalesce는 파티션의 수를 줄이거나 늘리는데 사용한다. 파티션 개수를 늘리려면 shuffle 인자를 true로 설정해야한다. 반면 파티션 수를 줄일 때는 이 인자를 false로 설정할 수 있다. 이때는 새로운 파티션 개수와 동일한 개수의 부모 RDD 파티션을 선정하고 나머지 파티션의 요소를 나누어 선정한 파티션과 병합(coalesce)하는 방식으로 파티션 개수를 줄인다. 즉, 셔플링을 수행하지 않는 대신 데이터 이동을 최소화하려고 부모 RDD의 기존 파티션을 최대한 보존한다. 
+        cf. repartition 변환 연산자는 단순히 shuffle을 true로 설정해 coalesce를 호출한 결과를 반환한다.
+        - `repartitionAndSortWithinPartition`: 정렬 가능한 RDD에서만 사용할 수 있다. 새로운 Partitioner 객체를 받아 각 파티션 내에서 요소를 정렬한다. 이 연산자는 셔플링 단계에서 정렬 작업을 함께 수행하기 때문에 repartition을 호출한 후 직접 정렬하는 것보다 성능이 더 낫다.
+- **데이터 셔플링(data shuffling)**: 파티션 간의 물리적인 데이터 이동을 의미한다. 셔플링은 새로운 RDD의 파티션을 만들려고 여러 파티션의 데이터를 합칠 때 발생한다. 예를 들어 키를 기준으로 요소를 그루핑하려면 스파크는 RDD의 파티션을 모두 살펴보고 키가 같은 요소를 전부 찾은 후, 이를 물리적으로 묶어서 새로운 파티션을 구성하는 과정을 수행해야한다.
+
+    ```python
+    prods = transByCust.aggregateByKey([], 
+    		lambda prods, tran: prods + [tran[3]],    #변환함수(Transform) -> 각 파티션 별로 요소를 병합
+        lambda prods1, prods2: prods1 + prods2)   #병합함수(Merge) -> 최종 결과를 병합
+    prods.collect()
+    #4.1절의 aggregateByKey 예시를 다시 보자. 
+    ```
+    <img width="529" alt="Screen Shot 2021-06-18 at 4 45 57 PM" src="https://user-images.githubusercontent.com/43725183/122525886-a93b5400-d054-11eb-9dcd-ea556f230a4d.png">
+
+
+    - 변환함수(Transform)은 각 파티션 별로 각 키의 값을 모아서 리스트를 구성한다.(**map task**) →  스파크는 이 리스트들을 각 노드의 중간 파일(interm files)에 기록한다 → 병합함수(merge)를 호출해 여러 파티션에 저장된 리스트들을 각 키별 단일 리스트로 병합한다.(**reduce task**) → 기본 partitioner(hash partitioner)를 적용해 각 키를 적절한 파티션에 할당한다.
+    - 셔플링 바로 전에 수행한 태스크를 **맵(map) 태스크**라고 하며, 바로 다음에 수행한 태스크를 **리듀스(reduce)** 태스크라고 한다. 맵 태스크의 결과는 중간 파일에 기록하며(주로 운영체제의 파일 시스템 캐시에만 저장), 이후 리듀스 태스크가 이 파일을 읽어들인다. 중간 파일을 디스크에 기록하는 작업도 부담이지만, 결국 셔플링할 데이터를 네트워크로 전송해야 하기 때문에 스파크 잡의 셔플링 횟수를 최소한으로 줄이도록 노력해야 한다.
+    - 셔플링 발생 조건
+        1. partitioner를 명시적으로 변경하는 경우
+            - 파티션 개수가 다른 HashPatitioner를 변환 연산자에 사용하거나, (`rdd.aggregateByKey(zeroValue, seqFunc, comboFunc, 100).collect()`)
+            - 사용자 정의 Partitioner를 사용하면
+
+            → 셔플링이 발생한다. 따라서 가급적이면 기본 partitioner를 사용해 의도하지 않은 셔플링은 최대한 피하는 것이 성능 면에서 가장 안전한 방법이다. 
+
+        2. partitioner를 제거하는 경우
+
+            변환 연산자에 partitioner를 명시적으로 지정하지 않았는데도 간혹 셔플링이 발생할 때가 있다. 대표적으로 map과 flatMap은 RDD의 Partitioner를 제거한다. 이 연산자 자체로는 셔플링이 발생하지 않지만, 연산자의 결과 RDD에 다른 변환 연산자를 사용하면 기본 Partitioner를 사용했더라도 여전히 셔플링이 발생한다.  → Pair RDD의 키를 변경하지 않는다면 map, flatMap 대신 mapValues, flatMapValues를 사용해 Partitioner를 보존하는 것이 좋다. 
+
+            ```python
+            rdd = sc.parallelize(range(10000))
+            rdd.map(lambda x: (x, x*x)).map(lambda (x, y): (y, x)).collect() #셔플링 발생 x
+            rdd.map(lambda x: (x, x*x)).reduceByKey(lambda v1, v2: v1+v2).collect() #셔플링 발생함
+            ```
+
+    - 셔플링을 수행하면 executor는 다른 executor(=실행자)의 파일을 읽어 들여야한다. 하지만 셔플링 도중 일부 실행자에 장애가 발생하면 해당 실행자가 처리한 데이터를 더 이상 가져올 수 없어서 데이터 흐름이 중단된다. → **외부 셔플링 서비스(external shuffling service)**는 실행자가 중간 셔플 파일을 읽을 수 있는 단일 지점을 제공해 셔플링의 데이터 교환 과정을 최적화할 수 있다. (`spark.shuffle.service.enabled=true`로 설정하기)
+    - 셔플링 관련 매개변수
+        - 셔플링 알고리즘 설정: `spark.shuffle.manager`의 값을 hash(해시 기반 셔플링), sort(정렬 기반 셔플링) → 정렬 기반 셔플링은 파일을 더 적게 생성하고 메모리를 더욱 효율적으로 사용할 수 있어 default 값이다.
+        - 중간 파일의 통합 여부: `spark.shuffle.consolidateFiles` → ext4나 XFS 파일 시스템을 사용한다면 이 값을 true로 변경(default = false)로 하는 것이 좋다.
+        - 셔플링에 쓸 메모리 리소스의 제한 여부: `spark.shuffle.spill` → 메모리를 제한하면 스파크는 제한 임계치를 초과한 데이터를 디스크로 내보낸다. 메모리 임계치를 너무 높게 설정하면 메모리 부족 예외(out-of-memory exception)이 발생할 수 있다. 반대로 너무 낮게 설정하면 데이터를 자주 내보내므로 균형을 잘 맞추는 것이 중요하다.
+        - `spark.shuffle.compress`: 중간 파일의 압축 여부를 지정할 수 있다.
+        - `spark.shuffle.spill.batchSize`: 데이터를 디스크로 내보낼 때 일괄로 직렬화 또는 역직렬화할 객체 개수를 지정한다.
+        - `spark.shuffle.service.port`: 외부 셔플링 서비스를 활성화할 경우 서비스 서버가 사용할 포트 번호를 지정한다.
+- 파티션 단위로 데이터 매핑: RDD의 각 파티션에 개별적으로 매핑 함수를 적용할수도 있다. 이 메서드를 잘 활용하면 각 파티션 내에서만 데이터가 매핑되도록 기존 변환 연산자를 최적화해 셔플링을 억제할 수 있다.
+    - `mapPartitions`와 `mapPartitionsWithIndex`: mapPartitions는 각 파티션의 모든 요소를 반복문으로 처리하고 새로운 RDD 파티션을 생성한다. mapPartitionWithIndex는 매핑 함수에 파티션 번호가 함께 전달된다.
+    - `glom`: 각 파티션의 모든 요소를 배열 하나로 모으고, 이 배열들을 요소로 포함하는 새로운 RDD를 반환한다. 따라서 새로운 RDD에 포함된 요소 개수는 이 RDD의 파티션 개수와 동일하다. glom 연산자는 기존의 Partitioner를 제거한다.
+
+        ```python
+        import random
+        l = [random.randrange(100) for x in range(500)]
+        rdd = sc.parallelize(l, 30).glom() #30개의 파티션으로 나눠져 있는 것을 모음. 
+        rdd.collect()
+        rdd.count() #30
+        ```
   </details>
   <details close>
   <summary>4.3. Joining, sorting, and grouping data</summary>
@@ -455,6 +619,45 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
 </details>
 
 ## 2장 meet the spark family
+<details close>
+  <summary><b>chapter 5</b> sparkling queries with spark sql</summary>
+</details>  
+<details close>
+  <summary><b>chapter 6</b> ingesting data with spark streaming</summary>
+</details>  
+<details close>
+  <summary><b>chapter 7</b> getting smart with MLlib</summary><br>
+  <blockquote>
+    <details close>
+    <summary>7.1 Introduction to machine learning</summary>
+    </details>
+    <details close>
+    <summary>7.2. Linear algebra in Spark</summary>
+    </details>
+    <details close>
+    <summary>7.3. Linear regression</summary>
+    </details>
+    <details close>
+    <summary>7.4. Analyzing and preparing the data</summary>
+    </details>
+    <details close>
+    <summary>7.5. Fitting and using a linear regression model</summary>
+    </details>
+    <details close>
+    <summary>7.6. Tweaking the algorithm</summary>
+    </details>
+    <details close>
+    <summary>7.7. Optimizing linear regression</summary>
+    </details>
+  </blockquote>
+</details>  
+<details close>
+  <summary><b>chapter 8</b> ML: classification and clustering</summary>
+</details>  
+<details close>
+  <summary><b>chapter 9</b> connecting the dots with graphX</summary>
+</details>  
+
 
 ## 3장 spark ops
 
