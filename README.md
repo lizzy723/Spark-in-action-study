@@ -545,7 +545,7 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
   <details close>
   <summary>4.2. Understanding data partitioning and reducing data shuffling</summary>
     
-- **데이터 파티셔닝(data partitioning)**: 데이터를 여러 클러스터 노드로 분할하는 메커니즘을 의미한다. 이 장에서는 일단 스파크 클러스터를 '병렬 연산이 가능하고 네트워크로 연결된 머신(즉, 노드)의 집합'정도로 생각하자.
+* **데이터 파티셔닝(data partitioning)** : 데이터를 여러 클러스터 노드로 분할하는 메커니즘을 의미한다. 이 장에서는 일단 스파크 클러스터를 '병렬 연산이 가능하고 네트워크로 연결된 머신(즉, 노드)의 집합'정도로 생각하자.
     - **파티션(partition)**: 과거에는 파티션 대신 스플릿(split)용어를 사용했다. RDD의 파티션은 RDD 데이터의 일부(조각 또는 슬라이스)를 의미한다. 예를 들어 로컬 파일 시스템에 저장된 텍스트 파일을 스파크에 로드하면, 스파크는 파일 내용을 여러 파티션으로 분할해 클러스터 노드에 고르게 분산 저장한다. 여러 파티션을 노드 하나에 저장할 수도 있다. 이렇게 분산된 파티션이 모여서 RDD 하나를 형성한다.
     - 파티션의 개수: 해당 RDD에 변환 연산을 실행할 "태스크 개수"와 직결되므로 파티션의 개수는 매우 중요하다. 태스크 개수가 필요 이하로 적으면 클러스터를 충분히 활용할 수 없다. 게다가 각 태스크가 처리할 데이터 분량이 실행자의 메모리 리소스를 초과해 메모리 문제가 발생할 수 있다. 따라서 클러스터의 코어 개수보다 서너 배 더 많은 파티션을 사용하는 것이 좋다.
     - **데이터 partitioner**: RDD의 데이터 파티셔닝은 RDD의 각 요소에 파티션 번호를 할당하는 partitioner 객체가 수행한다. partitioner는 HashPartitioner, RangePartitioner, 또는 사용자 정의 Partitioner(Pair RDD의 경우)로 구현할 수 있다.
@@ -568,7 +568,7 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     prods.collect()
     #4.1절의 aggregateByKey 예시를 다시 보자. 
     ```
-    <img width="800" alt="Screen Shot 2021-06-18 at 4 45 57 PM" src="https://user-images.githubusercontent.com/43725183/122525886-a93b5400-d054-11eb-9dcd-ea556f230a4d.png">
+    <img width="600" alt="Screen Shot 2021-06-18 at 4 45 57 PM" src="https://user-images.githubusercontent.com/43725183/122525886-a93b5400-d054-11eb-9dcd-ea556f230a4d.png">
 
 
     - 변환함수(Transform)은 각 파티션 별로 각 키의 값을 모아서 리스트를 구성한다.(**map task**) →  스파크는 이 리스트들을 각 노드의 중간 파일(interm files)에 기록한다 → 병합함수(merge)를 호출해 여러 파티션에 저장된 리스트들을 각 키별 단일 리스트로 병합한다.(**reduce task**) → 기본 partitioner(hash partitioner)를 적용해 각 키를 적절한 파티션에 할당한다.
