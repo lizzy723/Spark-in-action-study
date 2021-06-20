@@ -114,16 +114,22 @@ def createComb(t):
     q = int(t[4])
     return (total/q, total/q, q, total)
 
-def mergeVal((mn,mx,c,tot),t):
+def mergeVal(p,t):
+    mn,mx,c,tot = p
     total = float(t[5])
     q = int(t[4])
     return (min(mn,total/q),max(mx,total/q),c+q,tot+total)
 
-def mergeComb((mn1,mx1,c1,tot1),(mn2,mx2,c2,tot2)):
+def mergeComb(p1, p2):
+    mn1,mx1,c1,tot1 = p1
+    mn2,mx2,c2,tot2 = p2
     return (min(mn1,mn1),max(mx1,mx2),c1+c2,tot1+tot2)
 
 avgByCust = transByCust.combineByKey(createComb, mergeVal, mergeComb).\
-mapValues(lambda (mn,mx,cnt,tot): (mn,mx,cnt,tot,tot/cnt))
+mapValues(lambda mn,mx,cnt,tot: mn,mx,cnt,tot,tot/cnt)
+
+avgByCust = transByCust.combineByKey(createComb, mergeVal, mergeComb).\
+mapValues(lambda t: (t[0], t[1], t[2], t[3], t[3]/t[2]))
 avgByCust.first()
 
 totalsAndProds.map(lambda p: p[1]).map(lambda x: ", ".join(x[1])+", "+str(x[0])).saveAsTextFile("ch04output-totalsPerProd")
