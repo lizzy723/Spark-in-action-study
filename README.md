@@ -464,7 +464,7 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     ```
 
 - **Pair RDD 함수**
-    - 키별 개수 세기(`CountByKey`): ID가 53인 고객이 19번으로 가장 많이 구매했다.
+    - 키별 개수 세기(`CountByKey`): 각 키의 출현 횟수를 담은 Map 객체를 반환한다. ID가 53인 고객이 19번으로 가장 많이 구매했다.
 
         ```python
         transByCust.countByKey()
@@ -480,7 +480,7 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
 
  
 
-    - `mapValues` 변환 연산자로 Pair RDD 값 바꾸기: 25번 상품을 2번 이상 구매한 경우 5% 할인해주자.
+    - `mapValues` 변환 연산자로 Pair RDD 값 바꾸기: 키를 그대로 두고 값만 변경할 수 있다. 25번 상품을 2번 이상 구매한 경우 5% 할인해주자.
 
         ```python
         def applyDiscount(tran):
@@ -559,7 +559,7 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
         - `coalesce`와 `repartition`: coalesce는 파티션의 수를 줄이거나 늘리는데 사용한다. 파티션 개수를 늘리려면 shuffle 인자를 true로 설정해야한다. 반면 파티션 수를 줄일 때는 이 인자를 false로 설정할 수 있다. 이때는 새로운 파티션 개수와 동일한 개수의 부모 RDD 파티션을 선정하고 나머지 파티션의 요소를 나누어 선정한 파티션과 병합(coalesce)하는 방식으로 파티션 개수를 줄인다. 즉, 셔플링을 수행하지 않는 대신 데이터 이동을 최소화하려고 부모 RDD의 기존 파티션을 최대한 보존한다. 
         cf. repartition 변환 연산자는 단순히 shuffle을 true로 설정해 coalesce를 호출한 결과를 반환한다.
         - `repartitionAndSortWithinPartition`: 정렬 가능한 RDD에서만 사용할 수 있다. 새로운 Partitioner 객체를 받아 각 파티션 내에서 요소를 정렬한다. 이 연산자는 셔플링 단계에서 정렬 작업을 함께 수행하기 때문에 repartition을 호출한 후 직접 정렬하는 것보다 성능이 더 낫다.
-- **데이터 셔플링(data shuffling)**: 파티션 간의 물리적인 데이터 이동을 의미한다. 셔플링은 새로운 RDD의 파티션을 만들려고 여러 파티션의 데이터를 합칠 때 발생한다. 예를 들어 키를 기준으로 요소를 그루핑하려면 스파크는 RDD의 파티션을 모두 살펴보고 키가 같은 요소를 전부 찾은 후, 이를 물리적으로 묶어서 새로운 파티션을 구성하는 과정을 수행해야한다.
+- **데이터 셔플링(data shuffling)**: **파티션 간의 물리적인 데이터 이동을 의미한다.** 셔플링은 새로운 RDD의 파티션을 만들려고 여러 파티션의 데이터를 합칠 때 발생한다. 예를 들어 키를 기준으로 요소를 그루핑하려면 스파크는 RDD의 파티션을 모두 살펴보고 키가 같은 요소를 전부 찾은 후, 이를 물리적으로 묶어서 새로운 파티션을 구성하는 과정을 수행해야한다.
 
     ```python
     prods = transByCust.aggregateByKey([], 
@@ -612,9 +612,220 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
   </details>
   <details close>
   <summary>4.3. Joining, sorting, and grouping data</summary>
+    
+* **데이터 조인(Join)** : 스파크에서는 RDBMS의 고전적인 join 연산자뿐만 아니라, zip, cartesian, intersection 등 다양한 변환 연산자를 사용해 여러 RDD 내용을 합칠 수 있다.
+
+    <img width="621" alt="Screen Shot 2021-06-20 at 9 57 57 PM" src="https://user-images.githubusercontent.com/43725183/122675025-940c2400-d212-11eb-9db3-769ed31b6e25.png">
+
+    RDD의 key를 product ID로 변경
+
+    - RDBMS와 유사한 Join 연산자: `join`(RDBMS의 inner join과 동일), `leftOuterJoin`, `rightOuterJoin`, `fullOuterJoin` → 이 연산자들은 PairRDD에서만 사용할 수 있다. Partitioner 객체나 파티션 개수를 전달할 수 있다.
+
+        ```python
+        totalsByProd = transByProd.mapValues(lambda t: float(t[5])).reduceByKey(lambda tot1, tot2: tot1 + tot2)
+
+        products = sc.textFile("first-edition/ch04/ch04_data_products.txt").map(lambda line: line.split("#")).map(lambda p: (int(p[0]), p))
+        totalsAndProds = totalsByProd.join(products)
+        totalsAndProds.first()
+        #(68, (62133.899999999994, ['68', 'Niacin', '6295.48', '1']))
+        #68은 key(productID), 그리고 value의 첫번째는 totalByProd의 값, 두번째 리스트는 products 정보.
+        ```
+
+        ```python
+        totalsWithMissingProds = products.leftOuterJoin(totalsByProd)
+        missingProds = totalsWithMissingProds.filter(lambda x: x[1][1] is None).map(lambda x: x[1][0])
+        missingProds.foreach(lambda p: print(", ".join(p)))
+        #3, Cute baby doll, battery, 1808.79, 2
+        #43, Tomb Raider PC, 2718.14, 1
+        #63, Pajamas, 8131.85, 3
+        #20, LEGO Elves, 4589.79, 4
+        #어제 판매하지 않은 상품 리스트 출력. 
+        ```
+
+    - `subtract`이나 `subtractByKey` 변환 연산자로 공통 값 제거: `substract`은 첫번째 RDD에서 두번째 RDD의 요소를 제거한 여집합을 반환한다. 이는 일반 RDD에서도 사용할 수 있으며, 각 요소의 키나 값만 비교하는 것이 아니라 요소 전체를 비교해 제거여부를 판단한다. 
+    반면 `substracByKey`는 PairRDD에서만 사용할 수 있으며 키와 값을 모두 보는 것이 아니라 키만 본다.
+
+        ```python
+        missingProds = products.subtractByKey(totalsByProd)
+        missingProds.foreach(lambda p: print(", ".join(p[1])))
+        #leftOuterJoin후 None 값인 record만 뽑아내는 과정대신 substractByKey를 사용하면 된다. 
+        ```
+
+    - `cogroup` 변환 연산자로 RDD 조인: `cogroup`은 여러 RDD 값을 각각 키로 그루핑한 후 키를 기준으로 조인한다. `cogroup`은 RDD를 최대 세개까지 조인할 수 있는데, 단 `cogroup`을 호출한 RDD와 `cogroup`에 전달된 RDD는 모두 동일한 타입의 키를 가져야 한다.
+
+        ```python
+        prodTotCogroup = totalsByProd.cogroup(products)
+        prodTotCogroup.first()
+        #(68, (<pyspark.resultiterable.ResultIterable object at 0x107d3ab90>, <pyspark.resultiterable.ResultIterable object at 0x107da1fd0>))
+
+        prodTotCogroup.filter(lambda x: len(x[1][0].data) == 0).foreach(lambda x: print(", ".join(x[1][1].data[0])))
+        #total 가격과 product 정보의 outer join. 두 RDD 중 한쪽에만 등장한 키의 경우 다른 쪽 RDD iterator는 비어 있다. 
+        ```
+
+    - `intersection` 변환 연산자 사용: `intersection`은 교집합을 찾는다.
+
+        ```python
+        totalsByProd.map(lambda t: t[0]).intersection(products.map(lambda p: p[0]))
+        ```
+
+    - `cartesian` 변환 연산자로 RDD 두개 결합: 두 RDD의 데카르트 곱을 계산한다(요소의 모든 combination return). 따라서 이를 이용해 두 RDD 요소들을 서로 비교하는데도 사용할 수 있다.
+
+        ```python
+        rdd1 = sc.parallelize([7,8,9])
+        rdd2 = sc.parallelize([1,2,3])
+        rdd1.cartesian(rdd2).collect()
+        #[(7, 1), (7, 2), (7, 3), (8, 1), (8, 2), (8, 3), (9, 1), (9, 2), (9, 3)]
+        rdd1.cartesian(rdd2).filter(lambda el: el[0] % el[1] == 0).collect()
+        #rdd2숫자로 rdd1 숫자를 나머지 없이 나눌 수 있는 조합 찾기
+        [(7, 1), (8, 1), (8, 2), (9, 1), (9, 3)]
+        ```
+
+    - `zip` 변환 연산자로 RDD 조인: 모든 RDD에 사용가능. 첫번째 쌍은 각 RDD의 첫번째 요소를 조합한 것이며, 두번째 쌍은 두 번째 요소를 조합하고, 세 번째 쌍은 세 번째 요소를 조합하는 식으로 끝까지 이어진다. → 두 RDD의 파티션 개수가 다르거나 두 RDD의 모든 파티션이 서로 동일한 개수의 요소를 포함하지 않으면 오류를 발생한다.
+
+        ```python
+        rdd1 = sc.parallelize([1,2,3])
+        rdd2 = sc.parallelize(["n4","n5","n6"])
+        rdd1.zip(rdd2).collect()
+        #[(1, 'n4'), (2, 'n5'), (3, 'n6')]
+        ```
+
+    - `zipPartitions` 변환 연산자로 RDD 조인: 모든 RDD에 사용가능. RDD는 서로 파티션 개수가 동일해야하지만, 모든 파티션이 서로 동일한 개수의 요소를 가져야 한다는 조건을 꼭 만족하지 않아도 된다. → 아직 python에서는 사용할 수 없다.
+- **데이터 정렬(sorting)**
+    - `repartitionAndSortWithinPartition`(4.2 절 참조), `sortByKey`, `sortBy`을 사용해서 정렬할 수 있다.
+
+        ```python
+        sortedProds = totalsAndProds.sortBy(lambda t: t[1][1][1])
+        sortedProds.collect()
+        ```
+
+        이 결과는 `totalsAndProds` RDD에서 상품 이름을 키로 끄집어낸 후 `sortByKey`를 호출해서도 확인할 수 있다. 
+
+    - 정렬 가능한 클래스 생성하기
+    - 이차 정렬: 파티션을 2개로 바꾸고, 각 파티션 내에서 요소를 정렬한다.
+
+        ```python
+        rdd = sc.parallelize([(0, 5), (3, 8), (2, 6), (0, 8), (3, 8), (1, 3)])
+        rdd2 = rdd.repartitionAndSortWithinPartitions(2)
+        rdd2.glom().collect()
+        #[[(0, 5), (0, 8), (2, 6)], [(1, 3), (3, 8), (3, 8)]]
+        #파티션1: [(0, 5), (0, 8), (2, 6)]
+        #파티션2: [(1, 3), (3, 8), (3, 8)]
+        ```
+        <img width="300" alt="Screen Shot 2021-06-20 at 9 59 42 PM" src="https://user-images.githubusercontent.com/43725183/122675077-d46ba200-d212-11eb-852c-ac15c055cf3c.png">
+
+
+    - `top`과 `takeOrdered`로 정렬된 요소 가져오기: 이 두 메서드는 전체 데이터를 정렬하지 않는다. 그 대신 각 파티션에서 상위(또는 하위) n개 요소를 가져온 후 이 결과를 병합하고, 이 중 상위(또는 하위) n개 요소를 반환한다. → 두 메서드는 훨씬 더 적은 양의 데이터를 네트워크로 전송하며, sortBy와 take를 개별적으로 호출하는 것보다 무척 빠르다.
+- **데이터 그루핑(grouping)**: 데이터 그루핑은 데이터를 특정 기준에 따라 단일 컬렉션으로 집계하는 연산을 의미한다.
+    - `aggregateByKey`: 4.1.2절 참조
+    - `groupBykey`(`groupBy`): groupByKey는 동일한 키를 가진 모든 요소를 단일 키-값 쌍으로 모은 Pair RDD를 반환한다. groupBy는 PairRDD가 아닌 일반 RDD에서도 사용할 수 있으며, 일반 RDD를 PairRDD로 변환하고 groupByKey를 호출하는 것과 같은 결과를 만들 수 있다. groupByKey는 각 키의 모든 값을 메모리로 가져오기 때문에 이 메서드를 사용할 때는 메모리 리소스를 과다하게 사용하지 않도록 주의해야 한다. 모든 값을 한꺼번에 그루핑할 필요가 없으면 aggregateByKey나 reduceByKey, foldByKey를 사용하는 것이 좋다.
+    - `combineByKey`: combineByKey를 호출하려면 세 가지 커스텀 함수를 정의해 전달해야 한다. 첫번째 함수는 `createCombiner`로 각 파티션별로 키의 첫번째 값에서 최초 결합값을 생성하는 데 사용한다. 두번째 함수(`mergeValue`)는 Pair RDD에 저장된 값들을 결합값(combined value)로 병합하고(동일 파티션 내에서 해당 키의 다른 값을 결합 값에 추가해 병합하는데 사용), 세번째 함수(`mergeCombiner`)는 결합 값을 최종 결과를 병합(여러 파티션의 결합 값을 최종 결과로 병합)한다.
+
+        ```python
+        def createComb(t):
+            total = float(t[5])   #구매 금액
+            q = int(t[4])         #구매 수량
+            return (total/q, total/q, q, total)  #상품 낱개의 가격을 계산해 최저가격과 최고 가격의 초깃값으로 사용.
+
+        def mergeVal(p,t):
+            mn,mx,c,tot = p
+            total = float(t[5])
+            q = int(t[4])
+            return (min(mn,total/q),max(mx,total/q),c+q,tot+total)
+
+        def mergeComb(p1, p2):
+            mn1,mx1,c1,tot1 = p1
+            mn2,mx2,c2,tot2 = p2
+            return (min(mn1,mn1),max(mx1,mx2),c1+c2,tot1+tot2)
+
+        avgByCust = transByCust.combineByKey(createComb, mergeVal, mergeComb).\
+        mapValues(lambda t: (t[0], t[1], t[2], t[3], t[3]/t[2]))
+        avgByCust.first()
+
+        totalsAndProds.map(lambda p: p[1]).map(lambda x: ", ".join(x[1])+", "+str(x[0])).saveAsTextFile("ch04/ch04output-totalsPerProd")
+        avgByCust.map(lambda (pid, (mn, mx, cnt, tot, avg)): "%d#%.2f#%.2f#%d#%.2f#%.2f" % (pid, mn, mx, cnt, tot, avg)).saveAsTextFile("ch04/ch04output-avgByCust")
+        ```
   </details>
   <details close>
   <summary>4.4. Understanding RDD dependencies</summary>
+    
+* **RDD의 의존 관계(dependency)** : 스파크의 실행 모델은 **Directed Acyclic Graph(DAG)** 에 기반한다. 방향성(directed) 그래프는 간선이 한 정점에서 다른 정점을 가리키는 방향성이 있는 그래프를 의미한다. 그 중 DAG는 간선의 방향을 따라 이동했을 때 같은 정점에 두 번 이상 방문할 수 없도록 연결된 그래프를 의마한다. (이름 그대로 acyclic하다)
+**스파크의 DAG는 RDD를 정점(vertex)로, RDD 의존관계를 간선(edge)로 정의한 그래프를 의미한다.** RDD의 변환 연산자를 호출할 때마다 새로운 정점(RDD)와 새로운 간선(의존관계)이 생성된다. 변환 연산자로 생성된 RDD가 이전 RDD에 의존하므로 간선방향은 자식 RDD(새 RDD)에서 부모 RDD(이전 RDD)로 향한다. 이러한 RDD 의존 관계 그래프를 **RDD lineage**라고 한다.
+    - **좁은(narrow) 의존 관계**: 데이터를 다른 파티션으로 전송할 필요가 없는 변환 연산은 좁은 의존 관계를 형성한다.
+        - one-to-one 의존관계: range 의존관계 이외의 모든 셔플링이 필요하지 않은 변환연산자로 생성.
+        - range 의존관계: 여러 부모 RDD에 대한 의존 관계를 하나로 결합한 경우로 union 변환연산자만 해당.
+    - **넓은(wide, 또는 shuffle) 의존 관계**: 셔플링을 수행할 때 형성된다. 참고로 RDD를 조인하면 셔플링이 항상 발생한다.<br><br>
+
+    ```python
+    import random
+    l = [random.randrange(10) for x in range(500)]
+    listrdd = sc.parallelize(l, 5)  #파티션 5개로 나누기
+    pairs = listrdd.map(lambda x: (x, x*x))     
+
+    reduced = pairs.reduceByKey(lambda v1, v2: v1+v2)
+
+    finalrdd = reduced.mapPartitions(lambda itr: ["K="+str(k)+",V="+str(v) for (k,v) in itr])
+    finalrdd.collect()
+    print(finalrdd.toDebugString())
+    #map은 좁은(one-to-one) 의존 관계를 만드는 연산자. reduceBykey는 넓은(셔플) 의존관계를 형성
+    ```
+
+    <img width="1000" alt="Screen Shot 2021-06-20 at 9 55 12 PM" src="https://user-images.githubusercontent.com/43725183/122674936-34157d80-d212-11eb-8c49-cca2da11a64f.png">
+
+
+
+    ```
+    //print(finalrdd.toDebugString())의 결과
+
+    (5) PythonRDD[5] at collect at <stdin>:1 []
+     |  MapPartitionsRDD[4] at mapPartitions at PythonRDD.scala:133 []
+     |  ShuffledRDD[3] at partitionBy at NativeMethodAccessorImpl.java:0 []
+     +-(5) PairwiseRDD[2] at reduceByKey at <stdin>:1 []
+        |  PythonRDD[1] at reduceByKey at <stdin>:1 []
+        |  ParallelCollectionRDD[0] at parallelize at PythonRDD.scala:195 []
+    ```
+    5번 RDD가 가장 최근에 만들어진 RDD. ShuffledRDD가 출력된 지점을 곧 셔플링을 수행하는 시점으로 간주할 수 있다. → 이러한 출력 결과를 잘 활용하면 스파크 프로그램의 셔플링 횟수를 최소화할 수 있다. 
+    <br>괄호안 숫자(5)는 해당 RDD의 파티션 개수를 의미한다. 
+
+- **스파크의 stage와 task**: 스파크는 셔플링이 발생하는 지점을 기준으로 스파크 잡(job) 하나를 여러 스테이지(stage)로 나눈다.
+    <img width="1000" alt="Screen Shot 2021-06-20 at 9 54 13 PM" src="https://user-images.githubusercontent.com/43725183/122674901-0f210a80-d212-11eb-92c4-cdab59d039b1.png">
+
+
+    - **1번 stage**는 셔플링으로 이어지는 parallelize, map, reduceByKey 변환 연산들이 포함된다. 1번 스테이지 결과는 중간 파일의 형태로 실행자 머신의 로컬 디스크에 저장된다. **2번 stage**에서는 이 중간 파일의 데이터를 적절한 파티션으로 읽어 들인 후 두 번째 map 변환 연산자부터 마지막 collect 연산까지 실행한다.
+    - 스파크는 각 stage와 partition별로 task를 생성해 실행자에게 전달한다. 스테이지가 셔플링으로 끝나는 경우 이 단계의 태스트를 **shuffle-map task**(i.e. 1번 stage의 task)라고 한다. 스테이지의 모든 태스크가 완료되면 드라이버는 다음 스테이지의 태스크를 생성하고 실행자에 전달한다. 이 과정은 마지막 스테이지 결과를 드라이버로 반환할때까지 계속한다. 마지막 스테이지에 생성된 태스크를 **result task**(i.e. 2번 stage의 task)라고 한다.
+- **RDD의 체크포인트(checkpoint)**: 변환 연산자를 계속 이어 붙이면 RDD lineage가 제약 없이 길어질 수 있다. 따라서 스파크는 중간에 스냅샷으로 RDD를 스토리지에 보관할 수 있는 **checkpointing** 방법을 제공한다. 일부 노드에 장애가 발생해도 유실된 RDD 조각을 처음부터 다시 계산할 필요가 없고, 그 대신 스냅샷 지점부터 나머지 lineage를 다시 계산한다.
+    - 체크포인팅을 실행하면 스파크는 RDD의 데이터뿐만 아니라 RDD의 lineage까지 모두 저장한다. 체크포인팅을 완료한 후에는 저장한 RDD를 다시 계산할 필요가 없으므로 해당 RDD의 의존 관계와 부모 RDD 정보를 삭제한다.
+    - 체크 포인팅은 RDD의 checkpoint 메서드를 호출해 실행할 수 있다. 하지만 먼저 SparkContext.setCheckpointDir에 데이터를 저장할 디렉터리부터 지정해야 한다. checkpoint 메서드는 해당 RDD에 job이 실행되기 전에 호출해야 하며, 그 이후 체크포인팅을 실제로 완료하려면 RDD에 행동 연산자(Action) 등을 호출해 잡을 실행하고 RDD를 구체화(materialize)해야한다.
+  </details>
+  <details close>
+  <summary>4.5. Using accumulators and broadcast variables to communicate with Spark executors</summary><br>
+    
+* **누적 변수(accumulator)** 로 실행자에서 데이터 가져오기: 누적 변수는 여러 실행자가 공유하는 변수로 값을 더하는 연산만 허용한다. 누적 변수는 태스크의 진행상황을 추적하는데 사용할 수 있다.
+
+    ```python
+    #accumulators in Python cannot be named
+    acc = sc.accumulator(0)  #0은 initial value
+    l = sc.parallelize(range(1000000))
+    l.foreach(lambda x: acc.add(1))
+    acc.value  #누적 변수 값 가져오기. 이 값은 오직 드라이버만 참조할 수 있다. 
+    # 1000000  -> 1을 1000000번 더한 결과
+
+    #exception occurs(executor가 참조한 경우)
+    l.foreach(lambda x: acc.value)
+    #"Accumulator.value cannot be accessed inside tasks"
+
+    #accumulables are not supported in Python
+    #accumulableCollections are not supported in Python
+    ```
+
+- **공유 변수(broadcast variable)** 로 실행자에 데이터 전송: 공유변수는 여러 클러스터 노드가 공동으로 사용할 수 있는 변수다. 공유변수는 누적변수와 달리 실행자가 수정할 수 없다. 오직 드라이버만이 공유변수를 생성하며, 실행자에서는 읽기 연산만 가능하다.
+    - **실행자 대다수가 대용량의 데이터를 공용으로 사용할 때는 이 데이터를 공유 변수로 만드는 것이 좋다.(핵심 point1)** 보통은 드라이버에서 생성한 변수를 태스크에서 사용하면 스파크는 이 변수를 직렬화하고 태스크와 함께 실행자로 전송한다. 하지만 드라이버 프로그램은 동일한 변수를 여러잡에 걸쳐 재사용할 수 있고 잡 하나를 수행할 때도 여러 태스크가 동일한 실행자에 할당될 수 있으므로, 변수를 필요 이상으로 여러번 직렬화해 네트워크로 전송하는 상황이 발생할 수 있다. 이때는 데이터를 더욱 최적화된 방식으로 단 한 번만 전송하는 공유 변수를 사용하는 편이 좋다. (3.2절 예시 참조)
+    - 공유 변수는 Broadcast 타입의 객체를 반환하는 SparkContext.broadcast(value) 메서드로 생성한다. value 인수에는 직렬화 가능한 모든 종류의 객체를 전달할 수 있다.
+    - **공유변수값을 참조할 때는 항상 value 메서드를 사용해야 한다.(핵심 point2)** 그렇지 않고 공유 변수에 직접 접근하면 스파크는 이 변수를 자동으로 직렬화해 태스크와 함께 전송한다. 이렇게 하면 공유 변수를 사용하는 이유, 즉 성능상 이득을 완전히 잃어버리게 된다.
+    - 더 이상 필요하지 않은 공유변수는 destroy를 호출해 완전히 삭제(실행자와 드라이버에서 제거)할 수 있다. 또는 unpersist 메서드를 호출해 공유 변수 값을 실행자의 캐시에서 제거할 수 있다.
+    - 공유변수와 관련된 스파크 매개변수
+        - `spark.broadcast.compress`: 공유 변수를 전송하기 전에 데이터를 압축할지 여부를 지정한다.
+        - `spark.broadcast.blockSize`: 공유 변수를 전송하는데 사용하는 데이터 청크의 크기를 설정한다. 실전 테스트를 거쳐 도출한 기본 값(4096KB)를 그대로 유지하면 좋다.
+        - `spark.python.worker.reuse`: 파이썬의 공유 변수 성능에 큰 영향을 주는 매개변수다. 워커를 재사용하지 않으면 각 태스크별로 공유 변수를 전송해야 한다. 기본값이 true를 유지하면 좋다.
   </details></blockquote>
 </details>
 
