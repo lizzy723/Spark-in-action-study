@@ -872,6 +872,59 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
 
 ## 3장 spark ops
 
+<details close>
+  <summary><b>chapter 10</b> Running spark</summary><br>
+    <blockquote>
+    <details close>
+    <summary>10.1 An overview of Spark’s runtime architecture</summary>
+      
+* 스파크 런타임 컴포넌트: Spark는 실행되는 동안 다음 세 종류의 process를 생성한다. 아래 세 process는 Spark runtime architecture를 구성하는 **component(컴포넌트)** 들이다.<br>
+    <img width="623" alt="Screen Shot 2021-06-21 at 6 41 04 PM" src="https://user-images.githubusercontent.com/43725183/122741775-43eb9b00-d2c0-11eb-958e-60b43ef70266.png">
+
+    Driver의 위치는 클러스터 유형과 설정에 따라 다르다. 
+
+    1. **client-process(클라이언트)**: driver process를 생성하는 프로세스로 spark 동작을 위한 classpath, configuration option 뿐만 아니라 application 변수를 포함한다. spark-submit script, spark-shell script 또는 custom application의 형태로 제공된다.  
+    2. **driver(드라이버)**: Spark application에는 반드시 한 개의 driver process가 필요하다. driver process는 SparkContext와 Scheduler를 포함하며, 전체 spark application의 execution을 총괄하는 main function과 같은 존재이다.
+        - driver process와 그 하위 컴포넌트(sparkcontext, scheduler)는 
+        (1) cluster manager에게 memory와 CPU resource를 요청한다.
+        (2) application logic을 stage와 task 단위로 조각낸다.
+        (3) 각 task를 executor들에게 나눠준다.
+        (4) 각 executor의 결과를 모은다.
+        - deploy mode에 따른 분류 : driver process가 client JVM에 포함되면 **client-deploy mode**라고 부르고, client JVM과 분리되어 cluster내의 하나의 JVM으로 따로 구현되면 **cluster-deploy mode**라 부른다.
+        - driver process가 시작될 때 특정 application의 configuration이 반영된 `SparkContext` instance가 생성된다. 스파크 REPL 셸은 셸 자체가 드라이버 프로그램 역할을 하며, 스파크 컨텍스트를 미리 설정해 `sc`라는 변수로 제공한다. JAR파일을 제출하거나 또 다른 프로그램에서 스파크 API로 스파크 독립형 애플리케이션을 실행할 때는 애플리케이션에서 직접 스파크 컨텍스트를 생성해야 한다.  JVM당 하나의 `SparkContext`가 필요하다(여러개의 SparkContext instance를 생성할 수도 있지만, 사용하지 말자). 
+        → 스파크 컨텍스트는 RDD를 생성하거나 데이터를 로드하는 등 다양한 작업을 수행하는 여러 유용한 메서드를 제공하며, 스파크 런타임 인스턴스에 접근할 수 있는 기본 인터페이스이다.
+    3. **executor(실행자)**: driver로부터 받은 task를 수행하고, 그 결과를 다시 driver로 보내는 역할을 한다. executor는 여러 개의 task slot을 가지고 있는데, 이는 thread로 구현되어 병렬 작업을 가능하게 한다. 일반적으로 CPU core 수의 2,3배 값을 task slot으로 설정한다. task slot은 스레드로 구현되므로 머신의 물리적인 CPU 코어 개수와 반드시 일치할 필요는 없다. 
+- 스파크 클러스터 유형
+    - Spark on clusters
+        - **Standalone cluster**: 스파크 자체 클러스터. 스파크 자체 클러스터는 스파크 전용 클러스터다. 이 클러스터는 오직 스파크 애플리케이션에만 적합하도록 설계되었기 때문에 kerberos 인증 프로토콜로 보호된 HDFS를 지원하지 않는다. 이러한 보안 기능이 필요할 경우에는 YARN을 사용해 스파크를 실행해야 한다. 반면 스파크 자체 클러스터는 잡 시작에 걸리는 시간이 YARN보다 더 짧다.
+        - **YARN cluster**: 하둡의 리소스 매니저 및 작업 실행 시스템이다. 하둡 버전 1의 맵리듀스 엔진을 대체한 것으로 맵리듀스 버전2라고도 한다.
+        - **Mesos cluster**: 메소스는 확장성과 장애 내성을 갖춘 c++기반 분산 시스템 커널이다.
+    - **Spark local modes**
+    : special cases of a Spark "standalone cluster" running on "**a single machine**"
+        - Spark local mode
+        - Spark local cluster mode
+    </details>
+    <details close>
+    <summary>10.2. Job and resource scheduling</summary>
+    </details>
+    <details close>
+    <summary>10.3. Configuring Spark</summary>
+    </details>
+    <details close>
+    <summary>10.4. Spark web UI</summary>
+    </details>
+    <details close>
+    <summary>10.5. Running Spark on the local machine</summary>
+    </details>
+  </blockquote>
+</details>  
+<details close>
+  <summary><b>chapter 11</b> Running on a spark standalone cluster</summary>
+</details>  
+<details close>
+  <summary><b>chapter 12</b> Running on YARN and Mesos</summary><br>
+</details>  
+
 ## 4장 Bringing it together
 
 ### Appendix
