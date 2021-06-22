@@ -840,13 +840,107 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
   <summary><b>chapter 7</b> getting smart with MLlib</summary><br>
   <blockquote>
     <details close>
-    <summary>7.1 Introduction to machine learning</summary>
+    <summary>7.1 Introduction to machine learning</summary><br>
+      
+- 일반적은 머신러닝 프로젝트는 다음 단계로 진행된다.
+    1. **데이터 수집**
+    2. **데이터 정제 및 준비**: 머신러닝에 적합한 정형 포맷 외에도 다양한 비정형 포맷(텍스트, 이미지, 음성, 이진 데이터 등)으로 저장된 데이터가 필요할 때도 많다. 따라서 이러한 비정형 데이터를 수치형 특성 변수로 변환할 방법을 고안하고 적용해야 한다. 또 결측 데이터를 처리하고, 동일한 정보가 갖가지 다른 값으로 기록되어 있다면(예를 들어 VW와 폭스바겐은 같은 제조사를 의미) 이를 적절히 보완해야 한다. 마지막으로 특징 변수에 스케일링(scailing)을 적용해 데이터의 모든 차원을 비교 가능한 범위로 변환하기도 한다.
+    3. **데이터 분석 및 특징 변수 추출**: 데이터 내 상관관계를 조사하고, 필요하다면 데이터를 시각화 한다(or 차원 축소). 다음으로 가장 적절한 머신러닝 알고리즘을 선택하고, 데이터를 훈련 데이터셋과 검증 데이터셋으로 나눈다. 또는 교차 검증(cross-validation) 기법을 활용할 수도 있다. 교차 검증은 데이터셋을 여러 훈련 데이터셋가 검증 데이터셋ㅇ로 계속 나누어 테스트하고 결과들의 평균을 계산한다. 
+    4. **모델 훈련**: 입력 데이터를 기반으로 머신 러닝의 학습 알고리즘을 실행해 알고리즘의 매개변수들을 학습하도록 모델을 훈련시킨다. 
+    5. **모델 평가**: 모델을 검증 데이터셋에 적용하고 몇 가지 기준으로 모델 성능을 평가한다. 모델 성능이 만족스럽지 못할 때는 더 많은 입력 데이터가 필요하거나 특징 변수를 추출한 방법을 바꾸어야 할 수도 있다. 또는 feature space를 변경하거나 다른 모델을 시도할 수 있다. 어떤 변경을 시도하든 1단계나 2단계로 돌아가야한다. 
+    6. **모델 적용**: 마침내 완성된 모델을 웹 사이트의 운영 환경에 배포한다. 
+- 머신러닝 알고리즘의 유형
+    1. **지도학습(supervised learning)**: 레이블(label)이 포함된 데이터셋을 사용. 회귀와 분류.
+    2. **비지도학습(unsupervised learning)**: 레이블이 주어지지 않음. 군집화
+- 스파크를 활용한 머신러닝의 장점: (1)분산 처리, (2) 단일 API로 1~6번까지 처리 가능
     </details>
     <details close>
-    <summary>7.2. Linear algebra in Spark</summary>
+    <summary>7.2. Linear algebra in Spark</summary><br>
+      
+스파크는 (1) 로컬환경(분산 저장되지 않는 데이터)에서 사용할 수 있는 벡터 및 행렬 클래스와 (2) 분산 환경에서 사용할 수 있는 여러 행렬 클래스를 제공한다. 스파크의 분산 행렬을 사용하면 대규모 데이터의 선형 대수 연산을 여러 머신으로 분산해 처리할 수 있다. 
+
+> 스파크는 희소벡터, 밀집 벡터, 희소 행렬, 밀집 행렬을 모두 지원한다. 희소벡터(또는 행렬)는 원소의 대다수가 0인 벡터(또는 행렬)을 의미한다. 이러한 데이터는 0이 아닌 원소의 위치와 값의 쌍으로 표현하는 것이 더 효율적이다. map 또는 파이썬 딕셔너리와 유사하다. 
+반면 밀집벡터(또는 행렬)은 모든 데이터를 저장한다. 다시 말해 배열이나 리스트처럼 원소 위치를 따로 저장하지 않고, 모든 위치의 원소 값을 순차적으로 저장한다. 
+
+1. 로컬 벡터와 로컬 행렬
+    - 로컬 벡터 생성
+
+        ```python
+        from pyspark.mllib.linalg import Vectors, Vector
+
+        #dense vector
+        dv1 = Vectors.dense(5.0,6.0,7.0,8.0)
+        dv2 = Vectors.dense([5.0,6.0,7.0,8.0])
+
+        #sparse vector: 벡터 크기, 위치 배열, 값 배열을 인수로 전달
+        sv = Vectors.sparse(4, [0,1,2,3], [5.0,6.0,7.0,8.0])
+
+        dv2[2]   #특정 위치의 원소 가져오기 -> 7
+        dv1.size   #벡터 크기 조회  -> 4
+        dv2.toArray()   #numpy array로 전환
+        ```
+        <img width="589" alt="Screen Shot 2021-06-22 at 7 41 22 PM" src="https://user-images.githubusercontent.com/43725183/122911029-d445e080-d391-11eb-8621-728616ae3d20.png">
+
+
+
+    - 로컬 벡터의 선형 대수 연산
+
+        ```python
+        dv1 + dv2   #DenseVector([10.0, 12.0, 14.0, 16.0])
+        dv1.dot(dv2)  #174.0
+        ```
+
+    - 로컬 밀집 행렬, 로컬 희소 행렬 생성
+
+        ```python
+        from pyspark.mllib.linalg import Matrices
+
+        #dense matrix: 행, 열, 데이터 -> columnwise하게 들어간다. 
+        dm = Matrices.dense(2,3,[5.0,0.0,0.0,3.0,1.0,4.0])
+
+        #sparse matrix: 원소 값을 CSC(compressed sparse column)포맷으로 전달
+        #CRC(https://rfriend.tistory.com/551)
+        sm = Matrices.sparse(2,3,[0,1,2,4], [0,1,0,1], [5.0,3.0,1.0,4.0])
+        sm.toDense()
+        dm.toSparse()
+        dm[1,1]
+        ```
+
+2. **분산 행렬**: 분산 행렬은 여러 머신에 걸쳐 저장할 수 있고 대량의 행과 열로 구성할 수 있다. 
+    - **RowMatrix**: 각 행을 vector 객체에 저장해 RDD를 구성한다.
+    - **IndexedRowMatrix**: 행의 원소들을 담은 vector 객체와 이 행의 행렬 내 위치를 저장한다. 아래는 rm이라는 RowMatrix를 IndexedRowMatrix로 변환하는 방법이다.
+
+        ```python
+        from pyspark.mllib.linalg.distributed import IndexedRowMatrix, IndexedRow
+        rmind = IndexedRowMatrix(rm.rows().zipWithIndex().map(lambda x: IndexedRow(x[1], x[0])))
+        ```
+
+    - **CoordinateMatrix**: 개별 원소 값과 해당 원소의 행렬 내 위치(i,j)를 저장한다. 하지만 이 방법으로는 데이터를 효율적으로 저장할 수 없으므로 CoordinateMatrix는 오직 희소 행렬을 저장할 때만 사용해야 한다.
+    - **BlockMatrix**: 분산 행렬 간 덧셈 및 곱셈 연산을 지원한다. 행렬을 블록 여러개로 나누고, 각 블록의 원소들을 로컬 행렬의 형태로 저장한 후 이 블록의 전체 행렬 내 위치와 로컬 행렬 객체를 튜플로 구성한다. → ((i, j), Matrix)
+    - **분산 행렬의 선형 대수 연산**: 스파크는 분산 행렬의 선형 대수 연산을 제한적으로 제공하므로 나머지 연산은 따로 구현해야 한다.
     </details>
     <details close>
-    <summary>7.3. Linear regression</summary>
+    <summary>7.3. Linear regression</summary><br>
+      
+선형 회귀는 독립 변수와 목표 변수 사이에 **선형 관계**가 있다고 가정한다. 
+
+- **단순 선형 회귀 (simple linear regression)**
+    - model: <a href="https://www.codecogs.com/eqnedit.php?latex=h(x)&space;=&space;w_0&space;&plus;&space;w_1x" target="_blank"><img src="https://latex.codecogs.com/gif.latex?h(x)&space;=&space;w_0&space;&plus;&space;w_1x" title="h(x) = w_0 + w_1x" /></a><br>
+    - loss(cost) function(=MSE): <a href="https://www.codecogs.com/eqnedit.php?latex=C(w_0,&space;w_1)&space;=&space;\frac{1}{m}\Sigma(h(x_i)-y_i)^2&space;=&space;\frac{1}{m}\Sigma(w_0&space;&plus;&space;w_1x&space;-y_i)^2" target="_blank"><img src="https://latex.codecogs.com/gif.latex?C(w_0,&space;w_1)&space;=&space;\frac{1}{m}\Sigma(h(x_i)-y_i)^2&space;=&space;\frac{1}{m}\Sigma(w_0&space;&plus;&space;w_1x&space;-y_i)^2" title="C(w_0, w_1) = \frac{1}{m}\Sigma(h(x_i)-y_i)^2 = \frac{1}{m}\Sigma(w_0 + w_1x -y_i)^2" /></a><br>
+    - loss function이 최소값을 갖는 <a href="https://www.codecogs.com/eqnedit.php?latex=w_0,&space;w_1" target="_blank"><img src="https://latex.codecogs.com/gif.latex?w_0,&space;w_1" title="w_0, w_1" /></a>을 찾는다. → **최적화 과정**
+- **다중 선형 회귀 (multiple linear regression)**
+    - model: <a href="https://www.codecogs.com/eqnedit.php?latex=h(X)&space;=&space;w_0&space;&plus;&space;w_1x_1&space;&plus;&space;w_2x_2&space;&plus;...&plus;&space;w_nx_n&space;=&space;W^TX" target="_blank"><img src="https://latex.codecogs.com/gif.latex?h(X)&space;=&space;w_0&space;&plus;&space;w_1x_1&space;&plus;&space;w_2x_2&space;&plus;...&plus;&space;w_nx_n&space;=&space;W^TX" title="h(X) = w_0 + w_1x_1 + w_2x_2 +...+ w_nx_n = W^TX" /></a> → 여기서 <a href="https://www.codecogs.com/eqnedit.php?latex=X^T&space;=&space;[1&space;\&space;x_1&space;\&space;...&space;\&space;x_n]" target="_blank"><img src="https://latex.codecogs.com/gif.latex?X^T&space;=&space;[1&space;\&space;x_1&space;\&space;...&space;\&space;x_n]" title="X^T = [1 \ x_1 \ ... \ x_n]" /></a>(즉, 상수 1 추가)
+    - loss function: <a href="https://www.codecogs.com/eqnedit.php?latex=C(W)&space;=&space;\frac{1}{m}\Sigma((W^TX)_i-y_i)^2" target="_blank"><img src="https://latex.codecogs.com/gif.latex?C(W)&space;=&space;\frac{1}{m}\Sigma((W^TX)_i-y_i)^2" title="C(W) = \frac{1}{m}\Sigma((W^TX)_i-y_i)^2" /></a>
+    - loss function이 최소값을 갖는 W을 찾는다. → **최적화 과정**
+        - **정규방정식**으로 찾기: C(W)를 편미분한 값이 0이 되는 W를 계산 
+        → <a href="https://www.codecogs.com/eqnedit.php?latex=W&space;=&space;(X^TX)^{-1}X^TY" target="_blank"><img src="https://latex.codecogs.com/gif.latex?W&space;=&space;(X^TX)^{-1}X^TY" title="W = (X^TX)^{-1}X^TY" /></a>
+        - 경사 하강법으로 찾기: 정규 방정식의 해를 찾는 작업은 매우 많은 계산량이 필요하다. 특히 데이터셋의 차원이 크고 행이 많을수록 정규 방정식은 사용하기 어렵다. 따라서 정규 방정식보다는 **경사 하강법(gradient-descent method)** 를 더 널리 사용한다.
+            1. <a href="https://www.codecogs.com/eqnedit.php?latex=w_0,&space;w_1,&space;...,&space;w_n" target="_blank"><img src="https://latex.codecogs.com/gif.latex?w_0,&space;w_1,&space;...,&space;w_n" title="w_0, w_1, ..., w_n" /></a>에 임의의 값을 할당
+            2. <a href="https://www.codecogs.com/eqnedit.php?latex=w_j" target="_blank"><img src="https://latex.codecogs.com/gif.latex?w_j" title="w_j" /></a>별로 loss function의 편도함수를 계산. → <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\delta}{\delta&space;w_j}C(W)" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\frac{\delta}{\delta&space;w_j}C(W)" title="\frac{\delta}{\delta w_j}C(W)" /></a>
+            3. <a href="https://www.codecogs.com/eqnedit.php?latex=w_j" target="_blank"><img src="https://latex.codecogs.com/gif.latex?w_j" title="w_j" /></a>값을 갱신한다. → <a href="https://www.codecogs.com/eqnedit.php?latex=w_j&space;:=&space;w_j&space;-&space;\gamma\frac{\delta}{\delta&space;w_j}C(W)" target="_blank"><img src="https://latex.codecogs.com/gif.latex?w_j&space;:=&space;w_j&space;-&space;\gamma\frac{\delta}{\delta&space;w_j}C(W)" title="w_j := w_j - \gamma\frac{\delta}{\delta w_j}C(W)" /></a>, for every j
+            (편미분 값이 음수 ↔ <a href="https://www.codecogs.com/eqnedit.php?latex=w_j" target="_blank"><img src="https://latex.codecogs.com/gif.latex?w_j" title="w_j" /></a>가 증가하게 갱신됨 ↔ loss function 값이 작아지는 방향)
+            (<a href="https://www.codecogs.com/eqnedit.php?latex=\gamma" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\gamma" title="\gamma" /></a>는 gradient descent의 stability를 높일 수 있는 step-size 매개변수이다. )
+            4. 2, 3 과정을 반복하다가 loss function 값이 일정 tolerance value보다 작으면 알고리즘이 수렴(즉, 비용함수의 결과 값이 안정적일 때까지)했다고 판단하고 반복을 멈춤.
     </details>
     <details close>
     <summary>7.4. Analyzing and preparing the data</summary>
