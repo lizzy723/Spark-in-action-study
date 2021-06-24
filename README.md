@@ -944,9 +944,147 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     </details>
     <details close>
     <summary>7.4. Analyzing and preparing the data</summary>
+
+1. 데이터 불러오기: 파티션을 6개로 함 → RowMatrix로 변경.
+
+    ```python
+    from pyspark.mllib.linalg import Vectors, Vector
+    housingLines = sc.textFile("ch07/housing.data", 6)
+    housingVals = housingLines.map(lambda x: Vectors.dense([float(v.strip()) for v in x.split(",")]))
+
+    from pyspark.mllib.linalg.distributed import RowMatrix
+    housingMat = RowMatrix(housingVals)
+    ```
+
+2. EDA
+    - 분포 확인: `Statistics.colStats(housingVals)`에는 각 열별 평균값, 최대값, 최솟값등을 제공한다.
+
+        ```python
+        from pyspark.mllib.stat._statistics import Statistics
+        housingStats = Statistics.colStats(housingVals)
+        housingStats.min()
+        ```
+
+    - 열 코사인 유사도(column cosine similarity) 분석: 두 열을 벡터 두 개로 간주하고 이들 사이의 각도를 구한 값이다.
+
+        ```python
+        housingColSims = housingMat.columnSimilarities()
+        housingColSims.entries.foreach(lambda x: print(x))
+        ```
+
+        upper-triangular matrix가 반환되고, 열 유사도 값은 -1~ 1값을 가진다. 유사도 값이 -1이면 두 열의 방향이 완전히 반대고, 0이면 직각을 이룬다는 의미고, 1이면 두 열의 방향이 같다. 
+
+    - 공분산 행렬 계산: `corr`(org.apache.spark.mllib.stat.Statistics)를 사용하면 스피어만 상관계수 또는 피어슨 상관계수도 구할 수 있다.
+
+        ```python
+        housingCovar = housingMat.computeCovariance()
+        ```
+
+3. preprocessing
+    - 레이블 포인트로 변환: `LabeledPoint`는 거의 모든 스파크 머신 러닝 ㅇㄹ고리즘에 사용하는 객체로, 목표 변수 값과 특징 변수 벡터로 구성된다. 현재 데이터 셋에서 목표 변수는 마지막 칼럼에 있다.
+
+        ```python
+        from pyspark.mllib.regression import LabeledPoint
+        def toLabeledPoint(x):
+          a = x.toArray()
+          return LabeledPoint(a[-1], Vectors.dense(a[0:-1]))
+
+        housingData = housingVals.map(toLabeledPoint)
+        ```
+
+    - 데이터 분할: training 데이터셋은 모델 훈련에 사용하고, validation 데이터셋은 훈련에 사용하지 않은 데이터에서도 모델이 얼마나 잘 작동하는지 확인하는 용도로 사용한다. 일반적으로 8:2의 비율로 분할한다.
+
+        ```python
+        sets = housingData.randomSplit([0.8, 0.2])
+        housingTrain = sets[0]
+        housingValid = sets[1]
+        ```
+
+    - 특징 변수 스케일링 및 평균 정규화: feature scaling은 데이터 범위를 비슷한 크기로 조정하는 작업이고, normalization은 평균이 0에 가깝도록 데이터를 옮기는 작업이다. 이 두작업을 한번에 실행하려면 StandardScaler가 필요하다.
+
+        ```python
+        from pyspark.mllib.feature import StandardScaler
+        scaler = StandardScaler(True, True).fit(housingTrain.map(lambda x: x.features))
+
+        trainLabel = housingTrain.map(lambda x: x.label)
+        trainFeatures = housingTrain.map(lambda x: x.features)
+        validLabel = housingValid.map(lambda x: x.label)
+        validFeatures = housingValid.map(lambda x: x.features)
+
+        trainScaled = trainLabel.zip(scaler.transform(trainFeatures)).map(lambda x: LabeledPoint(x[0], x[1]))
+        validScaled = validLabel.zip(scaler.transform(validFeatures)).map(lambda x: LabeledPoint(x[0], x[1]))
+        ```
+
+        StandardScaler 학습 단계에서는 훈련 데이터셋만 사용하도록 한다. 머신러닝 모델이 미리 습득할 수 있는 정보는 훈련 데이터셋에만 한정해야 하므로 표준화 모델을 학습할 때도 훈련 데이터셋만 사용해야 한다.
     </details>
     <details close>
     <summary>7.5. Fitting and using a linear regression model</summary>
+      
+- model fitting: 머신러닝 알고리즘을 포함한 반복 알고리즘들은 같은 데이터를 여러번 재사용하기 때문에 캐시를 꼭 활용해야한다.
+
+    ```python
+    from pyspark.mllib.regression import LinearRegressionWithSGD
+    alg = LinearRegressionWithSGD()
+    trainScaled.cache()
+    validScaled.cache()
+    model = alg.train(trainScaled, iterations=200, intercept=True)
+    ```
+
+- prediction: `validPredicts`에는 예측값과 실제 Label이 함께 저장된다.
+
+    ```python
+    validPredicts = validScaled.map(lambda x: (float(model.predict(x.features)), x.label))
+    validPredicts.collect()
+
+    import math
+    RMSE = math.sqrt(validPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+    #4.292515313462585
+    ```
+
+    Root Mean Squared Error(RMSE)를 계산하면 4.29이다. 
+
+- model evaluation: RMSE외에도 MAE, R square(모델이 예측하는 목표 변수의 변화량을 설명하는 정도와 설명하지 못하는 정도를 나타내는 척도. 이 값이 1에 가깝다면 모델이 목표 변수가 가진 분산의 많은 부분을 설명할 수 있다는 의미), explainedVariance(R square와 유사한 지표)등을 산출할 수 있다.
+
+    ```python
+    from pyspark.mllib.evaluation import RegressionMetrics
+    validMetrics = RegressionMetrics(validPredicts)
+    validMetrics.rootMeanSquaredError  #4.292515313462585
+    validMetrics.meanSquaredError  #18.42568771631079
+    validMetrics.r2   #0.7632157714756399
+    ```
+
+- 모델 매개변수 해석: coefficient 확인. 특정 가중치(weight, coefficient)값이 0에 가깝다면 해당 차원은 목표 변수에 크게 기여하지 못한다는 의미(스케일링은 진행한 경우에)
+
+    ```python
+    import operator
+    print("\n".join([str(s) for s in sorted(enumerate([abs(x) for x in model.weights.toArray()]), key=operator.itemgetter(0))]))
+    #(0, 1.000538921034109)
+    #(1, 1.1273180677794499)
+    #(2, 0.24809539149291654)
+    #(3, 0.7864653560485336)
+    #(4, 1.846301136999396)
+    #(5, 2.498899558304125)
+    #(6, 0.20040482761985576)
+    #(7, 3.3293179912270845)
+    #(8, 1.9227159026529925)
+    #(9, 0.8581928817743215)
+    #(10, 1.9938882718949151)
+    #(11, 1.0187427812723926)
+    #(12, 3.9936868478891263)
+    ```
+
+    12번(LSTAT, 저소득층 인구 비율)컬럼과 7번(DIS, 보스턴 고용 센터 다섯 군데까지의 가중 거리)컬럼의 영향력이 큰 것으로 나타났다. 
+
+- 모델의 저장 및 불러오기: 스파크는 학습된 모델을 Parquet 파일 포맷으로 파일 시스템에 저장하고, 추후 다시 로드할 수 있는 방법을 제공한다. 스파크는 지정된 경로에 새로운 디렉터리를 생성하고 모델의 **데이터 파일**(모델의 weight와 intercept을 저장)과 **메타데이터 파일**(모델을 구현한 클래스 이름, 모델 파일의 버전, 모델에 사용된 특징 변수의 개수)을 Parquet 포맷으로 저장한다.
+
+    ```python
+    #저장하기
+    model.save(sc, "ch07/ch07output/model")
+
+    #다시 모델 불러오기
+    from pyspark.mllib.regression import LinearRegressionModel
+    model = LinearRegressionModel.load(sc, "ch07/ch07output/model")
+    ```
     </details>
     <details close>
     <summary>7.6. Tweaking the algorithm</summary>
