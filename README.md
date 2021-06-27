@@ -1138,20 +1138,153 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     </details>
     <details close>
     <summary>10.2. Job and resource scheduling</summary>
+      
+* 스파크 애플리케이션의 리소스 스케줄링은 먼저 (1) 실행자(JVM 프로세스)와 (2) CPU(태스크 슬롯) 리소스를 스케줄링한 후, 각 실행자에 (3) 메모리 리소스를 할당하는 순서로 진행한다.
+- 애플리케이션의 드라이버와 실행자가 시작되면 스파크 스케줄러는 이들과 직접 통신하면서 어떤 실행자가 어떤 태스크를 수행할지 결정한다. 스파크에서는 이 과정을 **잡 스케줄링(job scheduling)** 이라고 한다.
+- 스파크 애플리케이션의 리소스 스케줄링은 다음 두 가지 레벨로 이루어진다.
+    1. **클러스터 리소스 스케줄링**: 단일 클러스터에서 실행하는 다수의 애플리케이션에 클러스터의 리소스를 나누어주는 작업.
+    2. **스파크 잡 스케줄링**: 클러스터 매니저가 CPU와 메모리 리소스를 각 실행자에 할당하면 스파크 애플리케이션 내부에서는 잡 스케줄링이 진행된다. 잡 스케줄링은 클러스터 매니저와 관계없이 스파크 자체에서 수행하는 작업으로, 잡을 어떻게 태스크로 분할하고 어떤 실행자에게 전달할지 결정한다. **스파크는 RDD 계보를 바탕으로 잡과 스테이지, 태스크를 생성한다.** **그 다음 스파크 스케줄러는 생성한 태스크를 실행자에 분배하고 실행 경과를 모니터링한다.** 
+        - CPU 리소스 분배( = task 할당)
+            - (1) **선입선출(FIFO) 스케줄러** :가장 먼저 리소스를 요청한 잡이 모든 실행자의 태스크 슬롯을 필요한 만큼 전부 차지한다. FIFO는 스파크의 기본 스케줄링 모드이며, 한 번에 잡 하나만 실행하는 단일 사용자 애플리케이션에 적합하다. → 아래 그림을 보면 spark job 1만 실행중이다. <br>
+                <img width="527" alt="Screen Shot 2021-06-27 at 1 35 49 PM" src="https://user-images.githubusercontent.com/43725183/123532940-97d90280-d74c-11eb-8e82-874c6c49b049.png">
+
+                
+            - (2) **공정(FAIR) 스케줄러:** 라운드 로빈 방식으로 스파크 잡들에 균등하게 리소스를 분배한다.→ 아래 그림을 보면 spark job 1, 2 모두 실행중이다. <br>
+                <img width="534" alt="Screen Shot 2021-06-27 at 1 36 14 PM" src="https://user-images.githubusercontent.com/43725183/123532953-a58e8800-d74c-11eb-93dc-0a54387b92be.png">
+
+                
+            - **태스크 예비 실행(speculative execution)**: 스파크의 예비 실행은 straggler 태스크(동일 스테이지의 다른 태스크보다 더 오래 걸리는 태스크)문제를 해결할 수 있다. 예를 들어 다른 프로세스가 일부 실행자 프로세스의 CPU 리소스를 모두 점유할 때 해당 실행자는 태스크를 제 시간에 완수하지 못할 수 있다. 이때 예비 실행 기능을 사용하면 스파크는 해당 파티션 데이터를 처리하는 동일한 태스크를 다른 실행자에도 요청한다. 기존 태스크가 지연되고 예비 태스크가 완료되면 스파크는 기존 태스크의 결과 대신 예비 태스크의 결과를 사용한다.
+
+                하지만 일부 작업에서는 예비 실행하는 사용하는 것이 적절하지 않다. 예를 들어 관계형  데이터베이스아 같은 외부 시스템에 데이터를 내보내는 작업에 예비 실행을 적용하면 두 태스크가 동일 파티션의 동일 데이터를 외부 시스템에 중복 기록하는 문제가 발생할 수 있기 때문이다. 
+
+            - **데이터 지역성(data locality):** 스파크가 데이터와 최대한 가까운 위치에서 태스크를 실행하려고 노력하는 것을 의미한다. 스파크는 각 파티션별로 선호 위치(preferred location) 목록을 유지한다. 파티션의 선호 위치는 파티션을 저장한 호스트네임 또는 실행자 목록으로, 이 위치를 참고해 데이터와 가까운 곳에서 연산을 실행할 수 있다. 스파크는 HDFS 데이터로 생성한 RDD와 캐시된 RDD에서 사용할 때만 선호 위치 정보를 알아낼 수 있다. → 스파크가 파티션의 선호 위치 목록을 확보하면 스파크 스케줄러는 파티션 데이터를 실제로 저장한 실행자가 관련 태스크를 실행하도록 최대한 노력하고, 데이터 전송을 최소화한다. 특정 태스크의 지역성 레벨은 스파크 웹 UI Stage Details 페이지에 있는 Tasks 테이블의 Locality Level 칼럼에 표시된다.
+        - 메모리 리소스 스케줄링: 스파크 실행자 JVM 프로세스 메모리는 클러스터 매니저가 할당한다(cluster-deploy mode에서는 드라이버의 메모리도 할당한다.→ local mode도!) 각 프로세스에 메모리를 할당하면 스파크는 잡과 태스크가 사용할 메모리 리소스를 스케줄링하고 관리한다.
+            - 클러스터 매니저가 관리하는 메모리: 클러스터 매니저는 `spark.executor.memory` 매개변수에 지정된 메모리 용량을 실행자에 할당한다. 변수 값 뒤에 g(기가 바이트)나, m(메가 바이트) 접미사를 붙여 단위를 지정할 수 있다. 스파크는 이 메모리를 나누어 사용한다.
+            - 스파크가 관리하는 메모리(버전 1.5.2. 이하): 실행자에 할당된 메모리 중 일부를 나누어서 각각 **캐시데이터**와 임시 **셔플링 데이터**를 저장하는 데 사용한다.(→ *1.6.0 버전 이후로는 실행 메모리 영역과 스토리지 영역을 통합해 관리한다.*) 캐시 스토리지 크기는 `spark.storage.memoryFraction`(default = 0.6) 로 설정하며, 임시 셔플링 공간 크기는 `spark.shuffle.memoryFraction`(default = 0.2)로 설정한다. 하지만 스파크가 메모리 사용량을 측정하고 제한하기 전에 사용량이 설정 값을 초과로 할 수 있으므로 각각 `saprk.storage.safetyFraction`(default = 0.9)과 `spark.shuffle.safetyFraction`(default = 0.8)의 값이 추가로 필요하나다. 이 변수들은 셔플링과 캐시 스토리지의 공간을 지정된 비율만큼 낮춘다.
+
+                → 즉, 캐시 데이터 스토리지의 실제 힙 메모리 비율은 `0.6*0.9 = 54%`<br>
+                → 셔플링 데이터를 임시로 저장하는 힙 메모리 비율은 `0.2*0.8 = 16%`이다.
+
+                남은 80%는 태스크를 실행하는데 필요한 기타 자바객체와 리소스를 저장하는 데 사용한다.
+
+            - 드라이버 메모리 설정
+                - 드라이버의 메모리 리소스는 `spark.driver.memory`로 설정한다. 이 변수는 spark-shell이나 spark-submit 스크립트로 애플리케이션을 시작할 때 적용된다(클러스터 배포 모드와 클라이언트 배포 모드에 모두 적용됨)
+                - 반면 다른 외부 애플리케이션의 내부 코드에서 스파크 컨택스트를 동적으로 생성할 때는 드라이버가 외부 애플리케이션의 메모리 중 일부를 사용하므로 드라이버의 메모리 공간을 늘리려면 자바의 `-Xmx` 옵션을 사용해 애플리케이션 프로세스에 할당할 자바 힙의 최대 크기를 늘려야한다.
     </details>
     <details close>
     <summary>10.3. Configuring Spark</summary>
+      
+스파크 환경 매개변수를 설정하는 여러가지 방법(1~4)이 있지만 어떠한 방식으로 설정하든 애플리케이션에 적용한 모든 환경 매개변수 값은 `SparkConext`의 `SparkConf` 객체에 저장된다. spark-shell은 SparkContext를 자동으로 초기화해서 sc 벼수로 제공한다. SparkConf 객체는 다음과 같이 SparkContext의 getConf 메서드로 가져올 수 있다.(`sc.getConf()`) 
+
+1. 스파크 환경 설정 파일: 스파크 환경 매개변수의 기본 값은 `SPARK_HOME/conf/spark-defeaults.conf` 파일에 지정한다. 만약 별도의 환경 설정 파일을 사용하려면 `--properties-file` 명령줄 매개변수로 파일 경로를 변경해야 한다. 
+2. 명령줄 매개변수: 스파크는 환경 설정파일로 설정한 값보다 명령줄 매개변수로 지정한 값을 우선시한다. 명령줄 매개변수와 환경 설정 파일의 매개변수는 동일 변수라도 이름이 서로 다르다. 또 전체 스파크 환경 매개변수 중 일부만 명령줄 매개변수로 지정할 수 있다. (→ 명령줄 매개변수의 전체 목록은 spark-shell또는 spark-submi의 `—-help` 옵션을 사용해 확인할 수 있다)
+      
+    <img width="1000" alt="Screen Shot 2021-06-27 at 1 32 57 PM" src="https://user-images.githubusercontent.com/43725183/123532894-3153e480-d74c-11eb-86e2-7f99f90a799d.png">  
+    
+    ```bash
+    spark-shell --driver-memory 16g
+    spark-shell --conf spark.driver.memory=16g
+    ```
+
+    위의 두 줄은 동일하게 드라이버의 메모리를 16g로 설정하는 명령이다. `--conf`를 사용하면 명령줄에서도 환경 설정 파일과 동일한 이름으로 매개변수를 설정할 수 있다. 이 방식으로 환경 매개변수를 여러개 지정하려면 `--conf` 또한 매개변수마다 별도로 사용해야 한다. 
+
+3. 시스템 환경 변수: 환경 매개변수 중 일부는 `SPARK_HOME/conf/[spark-env.sh](http://spark-env.sh)` 파일로 지정할 수 있다. 이 매개변수들은 기본 값은 OS 한경 변수를 사용해 설정할 수도 있다. 시스템 환경 변수로 설정한 방식은 모든 설정 방식 중에서 가장 낮은 우선순위로 적용된다. `spark-env.sh.template`을 참고하자. 
+cf. 스파크 자체 클러스터의 spark-env.sh 파일을 변경했다면 모든 실행자가 동일한 환경 설정을 참고하도록 이 파일을 모든 워커 노드에 복사해야한다. 
+4. 프로그램 코드로 환경 설정: 다음과 같이 SparkConf 클래스로 프로그램 내에서 직접 스파크 환경 매개변수를 설정할 수도 있다. 그러나 런타임중에서는 변경할 수 없으므로 반드시 SparkContext 객체를 생성하기 전에 SparkConf 객체의 설정을 마쳐야 한다. 
+
+    ```python
+    from pyspark.conf import SparkConf
+    from pyspark.context import SparkContext
+    conf = SparkConf()
+    conf.set("spark.driver.memory", "16g")
+    conf.get("spark.driver.memory")  #16g
+    #conf.setAppName("<new name>")  #spark app 이름 변경
+    sc = SparkContext(conf)
+    ```
+
+5. master 매개변수: 애플리케이션을 실행할 스파크 클러스터의 유형을 지정한다. 
+
+    ```bash
+    spark-submit --master <master_connection_url>
+    ```
+
+    ```python
+    from pyspark.conf import SparkConf
+    from pyspark.context import SparkContext
+    conf = SparkConf()
+    conf.set("spark.master", "<master_connection_url>")
+    #conf.setMaster("<master_connection_url>")  #스파크 클러스터 유형 지정
+    sc = SparkContext(conf)
+    ```
+
+6. 설정된 매개변수 조회
+
+    ```python
+    sc.getConf().getAll()
+    ```
+    <img width="1000" alt="Screen Shot 2021-06-27 at 1 33 30 PM" src="https://user-images.githubusercontent.com/43725183/123532903-46307800-d74c-11eb-8bed-3f8d5c52c39d.png">
+
+
     </details>
     <details close>
-    <summary>10.4. Spark web UI</summary>
+    <summary>10.4. Spark web UI</summary><br>
+      
+스파크는 SparkContext를 생성하면서 동시에 스파크 웹 UI를 시작한다. 
+
+- **Jobs** 페이지: 현재 실행중인 잡, 완료된 잡, 실패한 잡의 통계 정보를 제공한다. 각 잡의 시작 시각과 실행시간, 실행 완료된 스테이지 및 태스크 정보를 확인할 수있다.
+- **Stages** 페이지: 잡의 스테이지를 요약한 정보를 제공한다. 여기서 각 스테이지의 시작 시각, 실행 시간, 실행 현황, 입출력 데이터의 크기, 셔플링 읽기, 쓰기 데이터양을 확인할 수 있다.  + 누적변수도 확인가능!
+
+    → 각 스테이지의 Description 칼럼을 클릭하면 해당 스테이지의 세부 페이지로 이동한다. 스테이지 세부 페이지에서는 잡 상태를 디버깅하는 데 유용한 정보를 얻을 수 있다. 예를 들어 잡의 실행 시간이 예상보다 오래 걸리면 스테이지 세부 페이지를 살펴보고 지연을 유발하는 스테이지와 태스크를 찾아서 문제 범위를 좁힐 수 있다. 
+
+    - 예1: GC Time(실행자가 자바 가비지 컬렉션을 실행하려고 태스크를 잠시 중단한 시간)이 과다하다면 실행자에 메모리 시로를 더 많이 할당하거나 RDD의 파티션 개수를 늘려야한다.(파티션을 추가하면 파티션당 요소 개수가 감소해 메모리 사용량을 줄일 수 있다)
+    - 예2: 셔플링 읽기, 쓰기 처리량이 과다하다면 프로그램 로직을 변경해 불필요한 셔플링을 피해야 한다
+- **Storage** 페이지: 캐시된 RDD 정보와 캐시 데이터가 점유한 메모리, 디스크 타키온 스토리지 용량을 보여준다.
+- **Environment** 페이지: 스파크 환경 매개변수뿐만 아니라 자바 및 스칼라의 버전, 자바 시스템 속성, 클래스패스 정보를 확인할 수 있다.
+- **Executors** 페이지: 클러스터 내 모든 실행자 목록(드라이버 포함)과 각 실행자(또는 드라이버)별 메모리 사용량을 포함한 여러 통계 정보를 제공한다. Storage Memory에 표시된 숫자는 스토리지 메모리의 용량이다.(10.2.4절의 54%)
+
+    각 실행자의 Thread Dump 링크를 클릭하면 해당 프로세스 내 모든 스레드의 현재 스택 추적 정보를 볼 수 있다. 스택 추적 정보는 대기 및 교착 상태(deadlock) 등으로 프로그램 실행이 느려지는 현상을 디버깅하는데 유용하다.
     </details>
     <details close>
     <summary>10.5. Running Spark on the local machine</summary>
+      
+* **로컬 모드**: 책의 대부분의 예제를 스파크 로컬 모드로 실행했다. 스파크 로컬 모드는 아직 대용량 클러스터에 접근할 권한이 없거나 간단한 아이디어 및 프로그램을 빠르게 테스트할 때 유용하다.
+
+    로컬 모드에서는 클라이언트 JVM 내에 드라이버와 실행자를 각각 하나씩만 생성한다. 그러나 실행자는 스래드를 여러 개 생성해 태스크를 병렬로 실행할 수 있다. <br>
+    <img width="612" alt="Screen Shot 2021-06-27 at 1 30 48 PM" src="https://user-images.githubusercontent.com/43725183/123532861-e508a480-d74b-11eb-8ec7-257dd77440f1.png">
+
+    스파크 로컬 모드는 클라리언트 프로세스를 마치 클러스터의 단일 실행자처럼 사용하며, master 매개변수에 지정된 스레드 개수는 곧 병렬 태스크 개수를 의미한다. 따라서 머신의 CPU 코어 개수보다 더 많은 스레드를 지정하면 CPU 코어를 더 효율적으로 활용할 수 있다.(→ 코어 개수의 두세 배 정도로 e.g. 쿼드 코어라면 스레드는 8~12개. 최소한 2개는 하기)
+
+    - `local[<n>]`: 스레드 <n> 개를 사용해 단일 실행자를 실행한다.
+    - `local`: 스레드 하나. `local[1]` 과 동일하다.
+    - `local[*]`: 스레드 개수를 로컬 머신에서 사용가능한 CPU 코어 개수와 동일하게 설정해 단일 실행자를 실행한다. 즉, 모든 CPU 코어를 전부 사용한다. → default
+    - `local[<n>, <f>]`: 스레드를 <n>개 사용해 단일 실행자를 실행하고, 태스크당 실패를 최대 <f>번까지 허용한다. 이 모드는 주로 스파크 내부 테스트에 사용한다.
+- **로컬 클러스터 모드:** 주로 스파크 내부 테스트 용으로 사용. IPC가 필요한 기능을 빠르게 테스트하거나 시연할 때도 유용하다. 로컬 클러스터 모드는 Spark standalone cluster를 로컬 머신에서 실행하는 것이다. 둘의 차이는 마스터를 별도 프로세스가 아닌 클라이언트 JVM에서 실행한다는 것이다. Spark standalone cluster에서 적용할 수 있는 환경 매개변수 대부분은 로컬 클러스터 모드에도 적용된다.`local-cluster[<n>, <c>, <m>]`: 로컬 머신에서 스레드 <c>개와 <m> MB 메모리를 사용하는 실행자를 <n>개 생성해 스파크 자체 클러스터를 실행하라는 의미이다. 
+→ 로컬 클러스터 모드에서는 각 실행자를 별도의 JVM에서 실행하므로 스파크 자체 클러스터와 거의 유사하다.
     </details>
   </blockquote>
 </details>  
 <details close>
   <summary><b>chapter 11</b> Running on a spark standalone cluster</summary>
+    <blockquote>
+    <details close>
+    <summary>11.1. Spark standalone cluster components</summary>
+    </details>
+    <details close>
+    <summary>11.2. Starting the standalone cluster</summary>
+    </details>
+    <details close>
+    <summary>11.3. Standalone cluster web UI</summary>
+    </details>
+    <details close>
+    <summary>11.4. Running applications in a standalone cluster</summary>
+    </details>
+    <details close>
+    <summary>11.5. Spark History Server and event logging</summary>
+    </details>
+    <details close>
+    <summary>11.6. Running on Amazon EC2</summary>
+    </details>
+  </blockquote>
 </details>  
 <details close>
   <summary><b>chapter 12</b> Running on YARN and Mesos</summary><br>
