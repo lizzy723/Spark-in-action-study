@@ -1088,9 +1088,199 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     </details>
     <details close>
     <summary>7.6. Tweaking the algorithm</summary>
+      
+1. 적절한 **감마 값(이동거리)** 와 **반복 횟수(iteration)** 을 찾는 방법
+    - 감마값이 너무 작으면 경사를 내려가는 거리가 짧으므로 알고리즘이 수렴하려면 더 많은 반복 단계를 거쳐야 한다. 반대로 너무 크면 알고리즘이 수렴하지 않을 수 있다(아래예시에서 3인 경우). 적절한 이동거리는 데이터셋에 따라 다르다.
+    - iteration 수가 너무 크면 알고리즘 학습시간이 너무 오래 걸리고, 너무 적으면 최저점에 도달하지 못할 수 있다(→ 아래 예시에서 600번 반복을 한다고 해서 더 나은 결과를 보여주지는 않는다).
+    - 이동거리와 반복 횟수의 최적 값을 찾는 방법 중 하나는 값의 여러 조합을 하나씩 실험해보고 가장 좋은 결과를 내는 조합을 고르는 것이다.
+
+        ```python
+        def iterateLRwSGD(iterNums, stepSizes, train, valid):
+          from pyspark.mllib.regression import LinearRegressionWithSGD
+          import math
+          for numIter in iterNums:
+            for step in stepSizes:
+              alg = LinearRegressionWithSGD()
+              model = alg.train(train, iterations=numIter, step=step, intercept=True)
+              rescaledPredicts = train.map(lambda x: (float(model.predict(x.features)), x.label))
+              validPredicts = valid.map(lambda x: (float(model.predict(x.features)), x.label))
+              meanSquared = math.sqrt(rescaledPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+              meanSquaredValid = math.sqrt(validPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+              print("%d, %5.3f -> %.4f, %.4f" % (numIter, step, meanSquared, meanSquaredValid))
+              #Uncomment if you wish to see weghts and intercept values:
+              #print("%d, %4.2f -> %.4f, %.4f (%s, %f)" % (numIter, step, meanSquared, meanSquaredValid, model.weights, model.intercept))
+
+        iterateLRwSGD([200, 400, 600], [0.05, 0.1, 0.5, 1, 1.5, 2, 3], trainScaled, validScaled)
+        # 200, 0.050 -> 7.5420, 7.4786
+        # 200, 0.100 -> 5.0437, 5.0910
+        # 200, 0.500 -> 4.6920, 4.7814
+        # 200, 1.000 -> 4.6777, 4.7756
+        # 200, 1.500 -> 4.6751, 4.7761
+        # 200, 2.000 -> 4.6746, 4.7771
+        # 200, 3.000 -> 108738480856.3940, 122956877593.1419
+        # 400, 0.050 -> 5.8161, 5.8254
+        # 400, 0.100 -> 4.8069, 4.8689
+        # 400, 0.500 -> 4.6826, 4.7772
+        # 400, 1.000 -> 4.6753, 4.7760
+        # 400, 1.500 -> 4.6746, 4.7774
+        # 400, 2.000 -> 4.6745, 4.7780
+        # 400, 3.000 -> 25240554554.3096, 30621674955.1730
+        # 600, 0.050 -> 5.2510, 5.2877
+        # 600, 0.100 -> 4.7667, 4.8332
+        # 600, 0.500 -> 4.6792, 4.7759
+        # 600, 1.000 -> 4.6748, 4.7767
+        # 600, 1.500 -> 4.6745, 4.7779
+        # 600, 2.000 -> 4.6745, 4.7783
+        # 600, 3.000 -> 4977766834.6285, 6036973314.0450
+        ```
+
+        → 대부분 검증 데이터셋의 RMSE는 훈련 RMSE보다 크다 (overfitting)
+
+2. **고차 다항식 추가**: 스파크는 고차 다항식을 사용한 비선형 회귀모델을 지원하지 않는다. 그 대신 기존 변수의 제곱값을 추가해 데이터셋을 확장해서 비슷한 효과를 낼 수 있다. 또한 비슷하게 두 변수가 공동으로 영향을 줄 때는 $x_1*x_2$와 같은 상호작용항(interaction term)을 추가하는 것도 도움이 된다. → 위의 예시에서 고차 다항식을 추가했을때 RMSE자체는 감소하였다. (but, RMSE가 감소했다고 무조건 좋은 것인가?)
+
+    ```python
+    def addHighPols(v):
+      import itertools
+      a = [[x, x*x] for x in v.toArray()]
+      return Vectors.dense(list(itertools.chain(*a)))
+
+    housingHP = housingData.map(lambda v: LabeledPoint(v.label, addHighPols(v.features)))
+    len(housingHP.first().features)  #26
+
+    setsHP = housingHP.randomSplit([0.8, 0.2])
+    housingHPTrain = setsHP[0]
+    housingHPValid = setsHP[1]
+    scalerHP = StandardScaler(True, True).fit(housingHPTrain.map(lambda x: x.features))
+    trainHPLabel = housingHPTrain.map(lambda x: x.label)
+    trainHPFeatures = housingHPTrain.map(lambda x: x.features)
+    validHPLabel = housingHPValid.map(lambda x: x.label)
+    validHPFeatures = housingHPValid.map(lambda x: x.features)
+    trainHPScaled = trainHPLabel.zip(scalerHP.transform(trainHPFeatures)).map(lambda x: LabeledPoint(x[0], x[1]))
+    validHPScaled = validHPLabel.zip(scalerHP.transform(validHPFeatures)).map(lambda x: LabeledPoint(x[0], x[1]))
+    trainHPScaled.cache()
+    validHPScaled.cache()
+
+    iterateLRwSGD([200, 400], [0.4, 0.5, 0.6, 0.7, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5], trainHPScaled, validHPScaled)
+    #이동거리가 1.1이고 반복횟수가 400회일때 결과가 가장 좋다(# 400, 1.100 -> 4.0378, 3.9836)
+
+    iterateLRwSGD([200, 400, 800, 1000, 3000, 6000], [1.1], trainHPScaled, validHPScaled)
+    #이동거리는 고정하고 반복횟수만 늘려보자. 
+    # 200, 1.100 -> 4.1605, 4.0108
+    # 400, 1.100 -> 4.0378, 3.9836
+    # 800, 1.100 -> 3.9438, 3.9901
+    # 1000, 1.100 -> 3.9199, 3.9982
+    # 3000, 1.100 -> 3.8332, 4.0633
+    # 6000, 1.100 -> 3.7915, 4.1138
+    #오히려 RMSE가 증가한다.
+    ```
+
+3. **편향-분산 상충 관계와 모델의 복잡도(bias-variance tradeoff)**: 머신러닝 모델은 훈련 데이터셋의 데이터를 잘 학습해야 하면서 현재까지 관찰되지 않은 다른 데이터에서도 좋은 성능을 낼 수 있는 확장성 또한 갖추어야 한다. 그러나 두 가지 목표를 완벽하게 이룰 수는 없다. 
+    - bias가 크다(모델을 바라보는 관점이 편향되었다. )
+     → **underfitting** → 모델을 더 복잡하게 만들어야 한다.
+    - variance가 크다(예측값의 변동 폭이 더 크다)
+     → **overfitteing** → 모델을 덜 복잡하게 만들어야 한다.
+4. 잔차 차트 그리기(**residual plot**): 모델의 복잡도를 어디까지 올려야 할지 잔차 차트를 통해 결정해보자. residual은 훈련 데이터셋의 각 예제별 실제 레이블 값과 모델이 예상한 레이블 값 차이이다. 잔차 차트는 X 축에 예측값을 설정하고 Y 축에 잔차 값을 설정해 그린다.
+→ 이상적인 잔차 차트에는 눈에 띄는 패턴이 없어야 한다. X축의 모든 점이 거의 동일한 Y 값을 가져야 하며, 점들을 가로지르는 최적선을 그렸을때 선이 거의 평평해야 한다. 반면 최적선이 U자 같은 모양을 보인다면 이는 일부 차원에서 비선형 모델이 더 적절할 수 있다는 의미다. 
+→ 자세한 잔차 차트 내용은 책의 범위를 벗어나므로 설명하지 않는다. 모델 성능에 대한 자세한 정보를 얻으려면 잔차 차트를 연구하는데 많은 노력을 기울여야 한다. 
+5. **규제화(regularization)**를 사용해 과적합 방지: 과적합을 방지하는 한 가지 방법으로 모델 매개변수 값이 클수록 불이익을 가해 모델 편향을 키우고 분산을 낮추는 regularization 기법을 사용하자. 
+
+    →  <a href="https://www.codecogs.com/eqnedit.php?latex=C(W)&space;=&space;\frac{1}{m}\Sigma((W^TX)_i-y_i)^2&space;-&space;\beta&space;=&space;\frac{1}{m}\Sigma((W^TX)_i-y_i)^2&space;-\lambda||w||" target="_blank"><img src="https://latex.codecogs.com/gif.latex?C(W)&space;=&space;\frac{1}{m}\Sigma((W^TX)_i-y_i)^2&space;-&space;\beta&space;=&space;\frac{1}{m}\Sigma((W^TX)_i-y_i)^2&space;-\lambda||w||" title="C(W) = \frac{1}{m}\Sigma((W^TX)_i-y_i)^2 - \beta = \frac{1}{m}\Sigma((W^TX)_i-y_i)^2 -\lambda||w||" /></a>
+
+    여기서 람다는 일반화 매개변수이고 여기에 가중치 벡터의 L1 norm(=$||w||_1$ → 벡터요소의 절대값을 합한 값) 또는 L2 norm(=$||w||_2$→ 벡터의 길이)을 곱해준다. 
+
+    - Lasso regression(L1) : 개별 가중치는 0으로 만들어 변수를 데이터셋에서 완전히 제거한다.
+
+        ```python
+        def iterateLasso(iterNums, stepSizes, regParam, train, valid):
+          from pyspark.mllib.regression import LassoWithSGD
+          for numIter in iterNums:
+            for step in stepSizes:
+              alg = LassoWithSGD()
+              model = alg.train(train, intercept=True, iterations=numIter, step=step, regParam=regParam)
+              rescaledPredicts = train.map(lambda x: (model.predict(x.features), x.label))
+              validPredicts = valid.map(lambda x: (model.predict(x.features), x.label))
+              meanSquared = math.sqrt(rescaledPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+              meanSquaredValid = math.sqrt(validPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+              print("%d, %5.3f -> %.4f, %.4f" % (numIter, step, meanSquared, meanSquaredValid))
+              #print("\tweights: %s" % model.weights)
+
+        iterateLasso([200, 400, 1000, 3000, 6000, 10000, 15000], [1.1], 0.01, trainHPScaled, validHPScaled)
+        #Our results:
+        # 200, 1.100 -> 4.1762, 4.0223
+        # 400, 1.100 -> 4.0632, 3.9964
+        # 1000, 1.100 -> 3.9496, 3.9987
+        # 3000, 1.100 -> 3.8636, 4.0362
+        # 6000, 1.100 -> 3.8239, 4.0705
+        # 10000, 1.100 -> 3.7985, 4.1014
+        # 15000, 1.100 -> 3.7806, 4.1304
+        ```
+
+    - Ridge regression(L2)
+
+        ```python
+        def iterateRidge(iterNums, stepSizes, regParam, train, valid):
+          from pyspark.mllib.regression import RidgeRegressionWithSGD
+          import math
+          for numIter in iterNums:
+            for step in stepSizes:
+              alg = RidgeRegressionWithSGD()
+              model = alg.train(train, intercept=True, regParam=regParam, iterations=numIter, step=step)
+              rescaledPredicts = train.map(lambda x: (model.predict(x.features), x.label))
+              validPredicts = valid.map(lambda x: (model.predict(x.features), x.label))
+              meanSquared = math.sqrt(rescaledPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+              meanSquaredValid = math.sqrt(validPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+              print("%d, %5.3f -> %.4f, %.4f" % (numIter, step, meanSquared, meanSquaredValid))
+
+        iterateRidge([200, 400, 1000, 3000, 6000, 10000], [1.1], 0.01, trainHPScaled, validHPScaled)
+        # Our results:
+        # 200, 1.100 -> 4.2354, 4.0095
+        # 400, 1.100 -> 4.1355, 3.9790
+        # 1000, 1.100 -> 4.0425, 3.9661
+        # 3000, 1.100 -> 3.9842, 3.9695
+        # 6000, 1.100 -> 3.9674, 3.9728
+        # 10000, 1.100 -> 3.9607, 3.9745
+        ```
+
+    → 일반화 기법은 모델 과적합 현상을 완화할 수 있다. 일반화 매개변수($\beta$)가 증가할수록 모델 과적합은 감소한다. 또, 일반화 기법은 모델 성능에 크게 기여하지 못하는 차원들의 영향력을 감소시킬 수 있으므로, 데이터셋의 차원이 매우 많은 상황에서도 오차를 더 빠르게 최적화할 수 있다. 그러나 일반화 매개변수의 최적 값 또한 찾아야 하기 때문에 모델 훈련과정을 더 복잡하게 만든다는 단점은 있다. 
+
+6. **k-겹 교차 검증(k-fold cross-validation)**: 전체 데이터셋을 동일한 크기의 k개 부분 집합으로 나눈다. 그런 다음 각 부분 집합을 전체 데이터셋에서 제외해 총 k개의 훈련 데이터셋을 만들고, 이를 사용해 모델 k개를 훈련시킨다. 각 모델의 훈련 데이터셋에서 제외된 부분 집합은 해당 모델의 검증 데이터셋으로 사용하며, 나머지 부분 집합은 훈련 데이터셋으로 사용한다. 
+→ 먼저 변수 값의 각 조합별로 모델 k개를 모두 학습시키고, 이 모델들이 기록한 **오차 평균을 계산**한 후 마지막으로 가장 작은 평균 오류를 기록한 변수 값의 조합을 선택하는 것이다.  
+→ k-겹 교차 검증이 중요한 이유는 어떤 훈련 데이터셋과 검증 데이터셋을 사용했느냐에 따라 모델 학습 결과가 크게 달라지기 때문이다.
     </details>
     <details close>
     <summary>7.7. Optimizing linear regression</summary>
+      
+선형 회귀 알고리즘이 loss function의 최저점을 더 빨리 찾을 수 있는 두 가지 방법을 추가로 알아보자.
+
+1. 미니배치 기반 확률적 경사 하강법
+    - **Batch Gradient Descent(BGD)**: 먼저 설명한 경사 하강법의 각 단계에서는 전체 데이터셋을 한꺼번에 사용해 오차를 계산하고 가중치 값을 갱신했다. 이러한 방법을 BGD라고 한다.
+    - 반면, 미니배치 기반 확률적 경사 하강법은 각 반복 단계에서 데이터셋의 일부분(k개, 여기서 k는 전체 샘플 수보다 작은 수)만 사용한다. k값이 1인 경우(즉, 알고리즘이 각 반복단계에서 오직 예제 한 개만 학습에 사용할 경우), 이를 **확률적 경사 하강법(Stochastic Gradient Descent, SGD)**라고 한다.
+    - 미니배치 기반 SGD를 사용하면 알고리즘을 병렬로 학습할때 계산량을 크게 줄일 수 있다. 그러나 모델을 충분히 훈련시키려면 반복 횟수를 늘려야 한다. 미니배치 기반 SGD는 수렴하기 더 어렵지만 최저점에 충분히 가깝게 갈 수 있다. 미니배치 데이터셋의 크기(k)를 작게 설정하면 알고리즘은 더 **확률적으로** 움직인다. 즉, 알고리즘이 비용 함수의 최저점을 향해 **더 무작위로** 움직인다는 의미다. 반면 k값으 크게 설정하면 알고리즘은 더욱 안정적으로 이동한다. 하지만 어느 경우에든 최저점에 충분히 도달하며 BGD와 유사한 결과를 얻을 수 있다.
+    - 스파크에서 사용할 경우 miniBatchFraction에 0~1값을 설정한다. 1로 설정하면 BGD와 마찬가지로 각 학습 단계에서 전체 데이터셋을 사용한다. 
+    → 반복 회수 매개변수는 전체 데이터셋이 총 100회 정도 반복 사용할 수 있는 값을 대체로 선택한다.
+
+        ```python
+        def iterateLRwSGDBatch(iterNums, stepSizes, fractions, train, valid):
+          for numIter in iterNums:
+            for step in stepSizes:
+              for miniBFraction in fractions:
+                alg = LinearRegressionWithSGD()
+                model = alg.train(train, intercept=True, iterations=numIter, step=step, miniBatchFraction=miniBFraction)
+                rescaledPredicts = train.map(lambda x: (model.predict(x.features), x.label))
+                validPredicts = valid.map(lambda x: (model.predict(x.features), x.label))
+                meanSquared = math.sqrt(rescaledPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+                meanSquaredValid = math.sqrt(validPredicts.map(lambda p: pow(p[0]-p[1],2)).mean())
+                print("%d, %5.3f %5.3f -> %.4f, %.4f" % (numIter, step, miniBFraction, meanSquared, meanSquaredValid))
+
+        iterateLRwSGDBatch([400, 1000], [0.05, 0.09, 0.1, 0.15, 0.2, 0.3, 0.35, 0.4, 0.5, 1], [0.01, 0.1], trainHPScaled, validHPScaled)
+        iterateLRwSGDBatch([400, 1000, 2000, 3000, 5000, 10000], [0.4], [0.1, 0.2, 0.4, 0.5, 0.6, 0.8], trainHPScaled, validHPScaled)
+        ```
+
+        결론적으로 미니배치 기반 SGD는 BGD와 비슷한 수준이 RSME를 달성할 수 있다. 그렇다면 계산 성능을 개선할 수 있는 미니배치 기반 SGD를 사용하는 편이 낫다. 
+
+2. LBFGS 최적화: LBFGS(Limited-memory BFGS)는 제한된 메모리로 BFGS(Broyden-Fletcher-Goldfarb-Shanno)알고리즘을 추정하는 기법이다. BFGS는 다차원 함수를 최적화하는 알고리즘으로 어떤 함수의 이계도 함수를 표현한 행렬(헤세 행렬, Hessian matrix)를 구하고, 이 헤세 행렬의 역행렬을 근사치로 계산한 후 n X n 행렬을 메모리에 유지한다. 반면 LBFGS는 과거 갱신 값을 최근 열 개 미만으로 유지하므로 차원 개수가 많을 때 메모리를 더 효율적으로 사용한다. 
+
+    → LBFGS는 지금까지 RMSE 결과와 거의 유사한 결과를 보이면서도 계산 성능을 크게 개선할 수 있다.
     </details>
   </blockquote>
 </details>  
