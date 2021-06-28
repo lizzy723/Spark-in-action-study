@@ -832,9 +832,43 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
 ## 2장 meet the spark family
 <details close>
   <summary><b>chapter 5</b> sparkling queries with spark sql</summary>
+    <blockquote>
+    <details close>
+      <summary>5.1. Working with DataFrames </summary>
+    </details>
+    <details close>
+      <summary>5.2. Beyond DataFrames: introducing DataSets </summary>
+    </details>
+    <details close>
+      <summary>5.3. Using SQL commands </summary>
+    </details>
+    <details close>
+      <summary>5.4. Saving and loading DataFrame data </summary>
+    </details>
+     <details close>
+      <summary>5.5. Catalyst optimizer </summary>
+    </details>
+    <details close>
+      <summary>5.6. Performance improvements with Tungsten </summary>
+    </details>
+  </blockquote>
 </details>  
 <details close>
   <summary><b>chapter 6</b> ingesting data with spark streaming</summary>
+  <blockquote>
+    <details close>
+      <summary>6.1. Writing Spark Streaming applications </summary>
+    </details>
+    <details close>
+      <summary>6.2. Using external data sources </summary>
+    </details>
+    <details close>
+      <summary>6.3. Performance of Spark Streaming jobs </summary>
+    </details>
+    <details close>
+      <summary>6.4. Structured Streaming </summary>
+    </details>
+  </blockquote>
 </details>  
 <details close>
   <summary><b>chapter 7</b> getting smart with MLlib</summary><br>
@@ -1286,6 +1320,34 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
 </details>  
 <details close>
   <summary><b>chapter 8</b> ML: classification and clustering</summary>
+   <blockquote>
+    <details close>
+      <summary>8.1. Spark ML library </summary>
+      
+스파크에서 사용할 수 있는 분류 알고리즘에는 로지스틱회귀, 나이브 베이즈, 서포트 벡터 머신, 의사 결정 트리, 랜덤 포레스트가 있다. 스파크 ML의 주요 컴포넌트인 추정자, 변환자, 평가자, ML 매개변수, 파이프라인을 자세히 알아보자.
+<img width="540" alt="Screen Shot 2021-06-28 at 10 54 00 PM" src="https://user-images.githubusercontent.com/43725183/123648225-bc73ce00-d863-11eb-888d-6b1238f7f30c.png">
+
+
+1. **변환자(transformer)**: 한 데이터셋을 다른 데이터셋으로 변환하는 머신 러닝 컴포넌트를 구현할 수 있다. e.g. `transform`
+2. **추정자(estimator)**: 주어진 데이터셋을 학습해 변환자(transformer)를 생성한다. e.g. `fit`
+3. **평가자(evaluator)**: 모델 성능을 단일 지표로 평가한다. e.g. RMSE
+4. ML 매개변수: `Param` 클래스로 매개변수 유형을 정의 → `ParamPair`에는 매개변수 유형(즉, `Param` 객체)과 변수 값의 쌍을 저장 → `ParamMap`은 여러 `ParamPair` 객체를 저장한다. 
+(지정방법 1) ParamPair 또는 ParamMap 객체를 추정자의 `fit` 메서드 또는 변환자의 `transform` 메서드에 전달한다. 
+
+    (지정방법 2) 각 매개변수의 set 메서드를 호출한다. e.g. `setRegParam(0.1)`
+
+5. ML 파이프라인(`PipelineModel`): 앞의 객체들을 결합해 파이프라인을 구성할 수 있다.
+    </details>
+    <details close>
+      <summary>8.2. Logistic regression </summary>
+    </details>
+    <details close>
+      <summary>8.3. Decision trees and random forests </summary>
+    </details>
+    <details close>
+      <summary>8.4. Using k-means clustering </summary>
+    </details>
+  </blockquote>
 </details>  
 <details close>
   <summary><b>chapter 9</b> connecting the dots with graphX</summary>
@@ -1458,6 +1520,29 @@ cf. 스파크 자체 클러스터의 spark-env.sh 파일을 변경했다면 모�
     <blockquote>
     <details close>
     <summary>11.1. Spark standalone cluster components</summary>
+      
+Standalone 클러스터는 master 프로세스와 worker(또는 slave) 프로레스로 구성된다. (아래 두 프로세스는 클러스터 관련 프로세스로 스파크 런타임 컴포넌트와는 별개의 개념이다)
+
+- **master 프로세스**: 클러스터 매니저 역할을 한다. 즉, 클라이언트가 실행에 요청한 애플리케이션을 받고, 각 애플리케이션에 워커 리소스(CPU 코어)를 스케줄링한다.
+- **worker 프로세스**: 애플리케이션의 태스크를 처리할 실행자를 시작한다.(클러스터 배포 모드에서는 애플리케이션의 드라이버를 실행하는 역할도 워커가 담당한다)
+
+→ 앞서 말했듯이 드라이버는 스파크 잡을 조정하고 모니터링하는 컴포넌트이며, 실행자는 잡의 태스크를 실행하는 컴포넌트이다. 
+→ 스파크 자체 클러스터를 구성하려면 클러스터의 모든 노드가 워커의 역할을 하도록 각 노드에 스파크를 설치해야한다. 
+
+다음의 노드 두개로 구성된 스파크 standalone 클러스터에서는 마스터 프로세스 하나와 워커 프로세스 두개를 실행하며 다음과 같은 순서로 애플리케이션을 시작한다. (아래 예시는 cluster deploy mode)<br>
+<img width="556" alt="Screen Shot 2021-06-28 at 10 55 09 PM" src="https://user-images.githubusercontent.com/43725183/123648415-e5945e80-d863-11eb-8bce-da792def25bd.png">
+
+1. 클라이언트 프로세스는 애플리케이션을 마스터에 제출한다.
+2. 마스터는 1번 노드의 워커에 드라이버를 시작하라고 지시한다. 
+3. 1번 노드의 워커는 드라이버 JVM을 시작한다.
+4. 마스터는 두 워커에 애플리케이션의 실행자를 시작하라고 지시한다. 
+5. 두 워커는 각각 실행자 JVM을 시작한다.
+6. 드라이버는 실행자와 직접 통신하며 스파크 애플리케이션을 실행한다. **클러스터의 프로세스들은 더 이상 관여하지 않는다.** 
+
+→ 각 실행자는 다수의 스레드(CPU 코어)를 할당받는다. 이는 다수의 태스크를 병렬로 실행할 수 있는 태스크 슬롯을 의미한다. 
+→ 스파크 버전 1.4.0부터는 워커당 실행자를 여러개 생성할 수 있다. 그러나 JVM 힙이 너무 크고(64GB 이상) 가비지 컬렉션이 잡 성능에 영향을 미친다면 워커 프로세스의 수를 늘려야할 수도 있다.
+
+→ 클러스터는 여러 애플리케이션을 동시에 실행할 수 있으며, 각 애플리케이션에는 드라이버와 실행자들이 독립적으로 할당된다.
     </details>
     <details close>
     <summary>11.2. Starting the standalone cluster</summary>
