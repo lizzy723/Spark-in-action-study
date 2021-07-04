@@ -1994,18 +1994,138 @@ Standalone 클러스터는 master 프로세스와 worker(또는 slave) 프로레
     </details>
     <details close>
     <summary>11.2. Starting the standalone cluster</summary>
+      
+Standalone 클러스터 모드에서는 스파크 셸을 시작하기 전에 클러스터를 먼저 가동해야 한다. 클러스터가 정상 가동되면 마스터 접속 URL(`spark://master_hostname:port`)을 통해 애플리케이션을 클러스터와 연결할 수 있다. 
+
+1. 클러스터 시작하기
+    - (방법1) 셸 스크립트로 클러스터 시작: 스파크가 제공하는 시작 스크립트를 실행한다. 스크립트는 자동으로 클러스터 환경을 설정하고 스파크의 기본 환경 설정을 로드한다. 단 스크립트를 실행하려면 스파크를 클러스터 내 모든 노드의 동일한 위치에 설치해야 한다.
+
+        스파크는 자체 클러스터의 컴포넌트를 시작하는 세 가지 시작 스크립트를 제공한다.(`SPARK_HOME/sbin`에서 찾을 수 있다.)
+
+        - `start-master.sh`: 마스터 프로세스를 시작한다. 로그파일의 기본 경로는 `SPARK_HOME/logs/spark-{username}-org.apache.spark.deploy.master.Master-1-{hostname}.out`이다. `SPARK_HOME/conf` 폴더 아래에 있는 ``spark-env.sh`` 파일에 시스템 환경 변수를 설정할 수 있다.
+        - `start-slaves.sh`: 클러스터에 등록된 워커 프로세스들을 모두 시작한다. SSH 프로토콜을 사용해 `SPARK_HOME/conf/slaves`(→ slaves(또는 workers) 파일에는 워커의 호스트네임 목록을 한 줄에 하나씩 입력한다) 파일에 나열된 모든 머신에 접속하고 워커 프로세스를 시작한다. 한 머신에서 여러 워커를 실행하려면 각 워커를 수동으로 시작하거나 `SPARK_WORKER_INSTANCES` 환경 변수를 사용해야 한다. 기본적으로 스크립트는 모든 워커 프로세스를 동시에 시작한다. 병렬 시작이 가능하려면 암호 없이 SSH에 접속 할 수 있도록 설정해야 한다.
+        - `start-all.sh`: 마스터 프로세스와 워커 프로세스들을 시작한다.  → 내부적으로 `start-master.sh`를 호출한 후 `start-slaves.sh`을 호출한다.
+    - (방법2) 수동으로 클러스터 시작: `SPARK_HOME/bin/spark-class` 스크립트에 스파크 마스터 클래스의 클래스 이름을 인수로 지정해서 호출해야 한다. 워커를 시작할때는 마스터 URL도 지정한다.
+
+        ```bash
+        $ spark-class org.apache.spark.deploy.master.Master
+        $ spark-class org.apache.spark.deploy.worker.Worker spark://<IPADDR>:<PORT>
+        ```
+
+2. 스파크 프로세스 조회
+    - 클러스터 프로세스들을 잘 시작했는지 확인하는 한 가지 방법은 JVM 프로세스 상태(JVM Process Status) 도구(`jps`)를 사용해 프로세스를 조회하는 것이다.
+    - 마스터 프로세스와 워커 프로세스는 각각 `Master`와 `Worker`로 표시된다. 클러스터 내부에서 실행중인 드라이버는 `DriverWrapper`로 표시되며, `spark-submit` 명령이 시작한 드라이버는 `SparkSubmit`으로 표시된다.(spark-shell 명령도 포함) 실행자는 `CoarseGrainedExecutorBackend`로 표시된다.
+3. 마스터 고가용성(master high availability) 및 복구 기능
+
+    마스터 프로세스는 스파크 자체 클러스터에서 가장 중요한 컴포넌트이다. 마스터 프로세스를 통해 애플리케이션을 제출하고 현재 실쟁중인 애플리케이션의 상태를 조회할 수 있기 때문이다. 
+
+    - **마스터 고가용성(master high availability)** : 마스터 프로세스가 중단되면 자동으로 재시작하는 기능이다. 스파크는 마스터 프로세스를 다시 시작할 때를 대비해 마스터가 중단되기 전까지 실행 중인 애플리케이션 및 워커 데이터를 복구할 수 있는 아래 두 가지 방법을 제공한다.
+        1. 파일시스템 기반 마스터 복구: `spark.deploy.recoveryMode` 매개변수 값을 FILESYSTEM 으로 지정하면 `spark.deploy.recoveryDirectory` 매개변수에 지정된 디렉토리에 등록된 모든 워커와 실행 중인 애플리케이션 정보를 저장한다. 
+        2. 주기퍼(zookeeper) 기반 마스터 복구: `spark.deploy.recoveryMode` 매개변수 값을 ZOOKEEPER 으로 지정하면 `spark.deploy.zookeeper.dir` 매개변수에 지정된 디렉토리에 등록된 모든 워커와 실행 중인 애플리케이션 정보를 저장한다. 또한 주키퍼가 설치 및 구성되어있어야 하며 `spark.deploy.zookeeper.url`  매개변수에 지정된 URL 로 주키퍼에 접속할 수 있어야 한다.
     </details>
     <details close>
     <summary>11.3. Standalone cluster web UI</summary>
+      
+마스터와 워커는 프로세스를 시작하면서 각 웹 UI 어플리케이션을 실행한다. 
+
+- **마스터 웹 UI:** 클러스터 리소스(메모리 및 CPU 코어) 사용 및 잔여 현황뿐만 아니라, 워커, 애플리케이션, 드라이버 정보도 페공한다.
+- **워커 웹 UI**: 마스터 웹 UI에서 각 워커 ID를 클릭하면 워커 웹 UI로 이동한다.
     </details>
     <details close>
     <summary>11.4. Running applications in a standalone cluster</summary>
+      
+다른 클러스터 유형과 마찬가지로 스파크 standalone 클러스터에서 스파크 클러스터를 실행하는 방법에는 (1) spark-submit 명령으로 프로그램을 제출, (2) 스파크 셸에서 프로그램을 실행하는 방법, (3) 별도의 애플리케이션에서 SparkContext 객체를 초기화 및 설정하는 방법이 있다. 어떤 방법을 사용하든 마스터 프로세스의 호스트 네임과 포트 정보로 구성된 마스터 접속 URL을 지정해야 한다. 
+
+- **드라이버 위치**: 스파크 자체 클러스터에서는 클라이언트 배포 모드와 클러스터 배포 모드 두 가지 방법으로 스파크 애플리케이션을 실행할 수 있으며, 이에 따라 드라이버 프로세스 위치가 다르다.
+    - 클라이언트 배포 모드(`—-deploy-mode client`): 드라이버를 클라이언트에서 실행. → default 값! cf. (2), (3) 방법은 클라이언트 배포 모드만 실행한다.
+    - 클러스터 배포 모드(`—-deploy-mode cluster`): 드라이버 리소스를 클러스터 매니저가 관리하며, 드라이버 프로세스가 비정상으로 종료되면 애플리케이션을 다시 재시작할 수 있다. 또한 드라이버를 실행할 워커가 애플리케이션 JAR 파일에 접근할 수 있어야 하는데 하지만 어떤 워커가 드라이버를 실행할지 미리 알 수 없으므로, 클러스터 배포 모드를 사용하려면 애플리케이션 JAR 파일을 모든 워커 머신의 로컬 디스크로 복사해야 한다. 또는 애플리케이션 JAR 파일을 HDFS에 복사하고 JAR 파일 이름에 HDFS URL을 지정해야 한다. 
+    → 드라이버 프로세스를 워커 프로세스 중 한 곳에 생성하며, 해당 워커의 CPU 코어를 하나 사용한다. 
+    → but, 파이썬에서는 사용 불가능.
+- **실행자 개수 지정**
+    - SPARK_MASTER_OPTS 환경 변수에 `spark.deploy.defaultCores`, `spark.cores.max`를 이용해 실행자가 사용할 core수를 제한할 수 있다. `SPARK_WORKER_CORES` 로 애플리케이션이 할당받을 수 있는 머신당 코어 개수도 제한할 수 있다.
+    - `spark.cores.max`에는 애플리케이션의 전체 코어 개수를 설정하며, `spark.executor.cores`에는 애플리케이션의 실행자당 코어 개수를 설정한다.
+- **추가 classpath 항목 및 파일 지정**
+    - SPARK_CLASSPATH 환경 변수를 사용하는 방법: JAR 파일이 여러개일 때 JAR 파일을 콜론(:)으로 구분해 나열한다.
+    - 명령줄 옵션을 사용하는 방법: `spark.driver.extraClasspath`, `spark.executor.extraClasspath`, `spark.driver.extraLibrarypath`, `spark.executor.extraLibrarypath`
+    → spark-submit의 경우는 `--driver-class-path`와 `--driver-library-path` 매개변수 사용.
+    - `--jars` 매개변수를 사용하는 방법: spark-submit 스크립트의 `—-jars` 매개변수에 JAR 파일을 지정한다.(파일이 여러개일 때는 쉼표로 구분해 나열한다) 스크립트는 지정된 파일들을 워커 머신에 자동으로 복사하고, 드라이버와 실행자의 클래스패스에 추가한다.
+
+        → 파일 위치: `file:`(지정된 파일을 각 워커에 복사한다. default), `local:`(워커 머신 내 동일한 위치의 로컬 파일을 지정한다.), `hdfs:`(HDFS 파일 경로를 지정한다. 각 워커는 HDFS에 바로 접근할 수 있다.), `http:, https:, ftp:`(파일의 URL을 지정한다)
+
+    - 프로그램 코드로 파일을 추가하는 방법: SparkContext의 addJar 또는 addFile 메서드를 호출해 프로그램 내부에서 JAR 및 파일을 추가할 수도 있다. `--jars` 및 `--files`옵션도 내부적으로는 이 메서드를 호출하므로 앞서 설명한 대부분의 내용이 여기에도 적용된다.
+    - 파이썬 파일 추가: spark-submit으로 파이썬 애플리케이션을 제출할 때는 `--py-files` 옵션을 사용해 .egg, .zip, .py를 추가할 수 있다.
+    `e.g. spark-submit --master <master_url> --py-files file1.py,file2.py,main.py`
+- **애플리케이션 강제 종료**
+    - 클라이언트 배포 모드: 클라이언트 프로세스를 강제 종료하여 애플리케이션을 강제 종료한다.
+    - 클러스터 배포 모드: `spark-class org.apache.spark.deploy.Client kill <master URL> <driver_ID>`
+- **애플리케이션 자동 재시작**: 클러스터 배포 모드로 애플리케이션을 제출할 때 명령줄에 `--supervise`옵션을 지정하면, 스파크는 드라이버 프로세스에 장애가 발생하거나 비정상 종료될 때 드라이버를 재시작한다(→ 처음부터 다시 시작).
     </details>
     <details close>
     <summary>11.5. Spark History Server and event logging</summary>
+      
+- **이벤트 로깅 기능**: 스파크는 웹 UI를 표시하는데 필요한 이벤트 정보를 spark.eventLog.dir(default: /tmp/spark-events) 매개변수에 지정된 폴더에 기록한다. 스파크 마스터 웹 UI는 이 폴더 정보를 스파크 웹 UI와 동일한 방식으로 표시할 수 있으며, 해당 애플리케이션이 종료된 후에도 잡, 스테이지, 태스크의 데이터르르 마스터 웹 UI에서 확인할 수 있다. 이벤트 로깅 기능은 spark.eventLog.enabled를 true로 설정해 활성화한다.
+- **스파크 히스토리 서버**: sbin아래 `start-history-server.sh` 스크립트로 시작하며 `stop-history-server.sh`로 중지할 수 있다. 기본 포트는 18080번이다.
+    - `SPARK_DEAMON_MEMORY`: 히스토리 서버에 할당할 메모리 리소스를 지정한다.
+    - `SPARK_PUBLIC DNS`: 서버의 공개주소를 설정한다.
+    - `SPARK_DEAMON_JAVA_OPTS`: 서버에 JVM에 매개변수를 추가한다.
+    - `SPARK_HISTORY_OPTS`: spark.history.로 시작하는 다양한 매개변수를 지정해 서버에 전달할 수 있다.( → spark-defaults.conf 파일에도 설정할 수 있다)
     </details>
     <details close>
     <summary>11.6. Running on Amazon EC2</summary>
+      
+1. 사전 준비
+    - **AWS 보안 액세스 키 발급받기**: 물론 root user 계정의 키를 AWS API에도 사용할 수는 있지만 보안상 권장하지 않는다. 더 권한이 낮은 사용자를 생성하고 이 사용자의 키를 따로 생성해 사용하는 편이 좋다.
+        1. IAM 페이지에서 **사용자** 페이지로 이동. **사용자 추가** 버튼 누르기 → 사용자 이름에 **sparkuser**를 입력하고, 액세스 유형에서 **프로그래밍 방식 액세스**에 체크한 **다음:권한** 버튼을 누르자.
+        2. **기존 정책 직접 연결** 아이콘을 클릭한 후 정책 목록 중에서 AmazonEC2FullAccess만 선택하면 된다. 그리고 **다음:검토**를 누르자.
+        3. 검토 단계에서 사용자 이름과 권한을 확인하고 사용자 만들기 버튼을 누르면 마지막 완료 창으로 이동한다.
+        4. 발급된 sparkuser 사용자의 액세스 키ID와 비밀 액세스 키가 발급된 것을 확인할 수 있다. → **.csv 다운로드** 버튼을 누르면 키 정보를 내려받을 수 있다. .csv 파일을 안전한 장소에 보관하자.
+    - **키 페어(key pair)** 생성: 키 페어는 클라이언트와 AWS 서비스간 통신을 보호하는 데 필요하다.
+        1. EC2 페이지에서 왼쪽 메뉴 중 **네트워크 및 보안>키 페어**를 선택한 후 화면 오른쪽 맨 위에서 region을 선택하자. 한 region에서 생성한 키는 다른 region에서 동작하지 않기 때문에 올바른 region을 선택하는 것이 중요하다. 
+        2. **키 페어 생성** 버튼을 누르고 키 페어 이름을 저장하자.(e.g. SparkKey) 키 페어를 생성하면 브라우저는 프라이빗 키(private key)가 담긴 `<key_pair_name>.pem`파일을 자동으로 내려받는다. 
+        3. 접근 권한 변경: `chmod 400 SparkKey.pem`
+        4. 키가 유효한지 확인: `openssl rsa -in SparkKey.pem -check`
+2. EC2 기반 스파크 standalone 클러스터 생성
+    - spark-ec2 스크립트: EC2 클러스터를 관리하는 메인 스크립트로 [https://goo.gl/m5A4oi](https://goo.gl/m5A4oi) 에서 다운로드 받을 수 있다. SPARK_HOME 폴더에 ec2 이름으로 디렉터리를 하나 생성하고, AMPLab의 spark-ec2 깃허브 저장소를 이 디렉토리로 복사하자. spark-ec2 스크립트는 다음과 같이 호출한다.→ `spark-ec2 options action cluster_name`
+        <img width="596" alt="Screen Shot 2021-07-04 at 3 42 33 PM" src="https://user-images.githubusercontent.com/43725183/124375689-75ac2b00-dcde-11eb-88e2-005af70a6f59.png">
+
+        위의 각 액션을 실행하려면 생성할(또는 생성할) 클러스터를 지칭하는 cluster_name과 security credentials를 인수로 전달해야 한다. 
+
+    - 보안 자격 증명(security credentials) 지정
+
+        ```bash
+        export AWS_SECRET_ACCESS_KEY=<your_AWS_access_key>
+        export AWS_SECRET_KEY_ID=<your_AWS_key_id>
+        ```
+
+        위와 같이 환경변수를 설정하고, spark-ec2 스크립트의 `—-key-pair` 옵션(줄여서 -k)에 **키 페어 이름**을 지정하고, `--identity-file`옵션(줄여서 -i)에 프라이빗 키가 담긴 **pem 파일**을 전달한다. 정리하면 다음과 같다.
+
+        ```bash
+        spark-ec2 -k SparkKey \
+         -i SparkKey.pem \
+         -r eu-west-1 \
+         launch spark-in-action
+        ```
+
+    - 인스턴스 유형 변경: spark-ec2 스크립트가 생성하는 EC2 인스턴스 기본 유형은 m3.large로 코어 두 개와 RAM 7.5GB로 구성된다. 기본설정대로하면 마스터와 슬레이브 머신에 동일하게 m3.large가 사용된다. 보통은 마스터가 리소스를 더 적게 쓰기 때문에 비용 낭비를 가져올 수 있다.
+        - 슬레이브 유형: `--instance-type`(줄여서 -t)로 t2.small로 낮추자.
+        - 마스터 유형: `--master-instance-type`(줄여서 -m)로 t2.micro로 낮추자.
+    - 하둡 버전 변경: spark-ec2는 기본으로 하둡 1.0.4를 설치하는데 이를 변경하자. `--hadoop-major-version`의 매개변수를 2로 바꾸면 스크립트는 하둡 2.0.0 MR1이 포함된 클라우데라 CDH 4.2.0용 스파크를 설치한다.
+    - 보안 그룹 설정: 기본적으로 EC2 인스턴스는 인터넷 포트를 통해 접근할 수 없다. 따라서 기본 설정을 바꾸지 않으면 스**파크 EC2 클러스터 외부에 위치한 클라이언트 머신에서 애플리케이션을 제출할 수 없다.** 따라서 EC2 보안 그룹(security group)을 추갈 설정해 EC2 머신이 외부 인터넷과 통신할 수 있도록 인바운드 및 아웃바운드 규칙을 변경해야 한다. 
+    → EC2 페이지에서 왼쪽 메뉴의 network&security 아래에 있는 **보안 그룹** 메뉴를 선택하자. **보안 그룹 생성** 버튼을 누르면 보안 그룹을 생성할 수 있는 대화상자를 표시한다. 보안 그룹 이름을 설정하자(e.g. Allow7077) 
+    → 그러나 이처럼 인터넷 전체를 대상으로 포트를 개방하는 것은 권장하지 않으며, 오직 테스트 환경에서만 한시적으로 사용해야 한다. 운영 환경에서는 특정 주소만 접근할 수 있도록 제한하는 것이 좋다.
+    - 클러스터 시작: 스크립트는 보안 그룹을 생성하고 인스턴스를 생성한 후 스칼라, 스파크, 하둡, 타키온 패키지를 설치한다. 스크립트는 이 패키지들을 깃허브 저장소에서 내려받고 rsync프로그램을 사용해 각 워커에 분산 배포한다.
+
+        ```bash
+        ./spark-ec2 \
+        --key-pair=SparkKey \
+        --identity-file=SparkKey.pem \ 
+        --slaves=3 \                #slave 수 3개로 지정
+        --region=eu-west-1 \
+        --instance-type=m1.medium \ 
+        --master-instance-type=m1.small \
+        --hadoop-major-version=2 \ 
+        launch spark-in-action
+        ```
     </details>
   </blockquote>
 </details>  
