@@ -1340,12 +1340,460 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     </details>
     <details close>
       <summary>8.2. Logistic regression </summary>
+      
+- 로지스틱 회귀모델: 로지스틱 회귀는 톡정 샘플이 특정 클래스에 속할 확률을 계산한다. 다음 식의 좌변은 logit(log-odds)이라고 한다.
+    - model: <a href="https://www.codecogs.com/eqnedit.php?latex=ln(\frac{p}{1-p})&space;=&space;w_0&space;&plus;&space;w_1x_1&space;&plus;&space;...&space;&plus;w_nxz-n&space;=&space;W^TX" target="_blank"><img src="https://latex.codecogs.com/gif.latex?ln(\frac{p}{1-p})&space;=&space;w_0&space;&plus;&space;w_1x_1&space;&plus;&space;...&space;&plus;w_nxz-n&space;=&space;W^TX" title="ln(\frac{p}{1-p}) = w_0 + w_1x_1 + ... +w_nxz-n = W^TX" /></a>  → <a href="https://www.codecogs.com/eqnedit.php?latex=p&space;=&space;\frac{1}{1&plus;e^{-W^TX}}" target="_blank"><img src="https://latex.codecogs.com/gif.latex?p&space;=&space;\frac{1}{1&plus;e^{-W^TX}}" title="p = \frac{1}{1+e^{-W^TX}}" /></a>
+    - loss(cost) function(-log-likelihood function): <a href="https://www.codecogs.com/eqnedit.php?latex=l(w)&space;=&space;\Sigma&space;y_iW^TXi&space;-&space;ln(1-e^{W^TXi})" target="_blank"><img src="https://latex.codecogs.com/gif.latex?l(w)&space;=&space;\Sigma&space;y_iW^TXi&space;-&space;ln(1-e^{W^TXi})" title="l(w) = \Sigma y_iW^TXi - ln(1-e^{W^TXi})" /></a>
+    - 경사 하강법으로 loss function의 최저값을 찾는다.
+- 로지스틱 회귀분석 실습
+    1. 데이터 준비
+        - DataFrame 만들기
+
+            ```python
+            #데이터 불러와서 숫자 자료형 실수로 변경하기
+            def toDoubleSafe(v):
+                try:
+                    return float(v)
+                except ValueError:
+                    return v
+
+            census_raw = sc.textFile("ch08/adult.raw", 4).map(lambda x:  x.split(", "))
+            census_raw = census_raw.map(lambda row:  [toDoubleSafe(x) for x in row])
+
+            #5장의 세번째 방법으로 DataFrame 만들기
+            from pyspark.sql.types import *
+            columns = ["age", "workclass", "fnlwgt", "education", "marital_status",
+                "occupation", "relationship", "race", "sex", "capital_gain", "capital_loss",
+                "hours_per_week", "native_country", "income"]
+            adultschema = StructType([
+                StructField("age",DoubleType(),True),
+                StructField("capital_gain",DoubleType(),True),
+                StructField("capital_loss",DoubleType(),True),
+                StructField("education",StringType(),True),
+                StructField("fnlwgt",DoubleType(),True),
+                StructField("hours_per_week",DoubleType(),True),
+                StructField("income",StringType(),True),
+                StructField("marital_status",StringType(),True),
+                StructField("native_country",StringType(),True),
+                StructField("occupation",StringType(),True),
+                StructField("race",StringType(),True),
+                StructField("relationship",StringType(),True),
+                StructField("sex",StringType(),True),
+                StructField("workclass",StringType(),True)
+            ])
+            from pyspark.sql import Row
+            dfraw = sqlContext.createDataFrame(census_raw.map(lambda row: Row(**{x[0]: x[1] for x in zip(columns, row)})), adultschema)
+            dfraw.show()
+            ```
+
+        - 결측값 다루기
+
+            **결측값을 다루는 4가지 방법**<br>
+            (1) 특정 칼럼(특정 변수)의 데이터가 과도하게 누락되어 있다면, 예측 결과에 부정적인 영향을 줄 수 있으므로 이 칼럼의 모든 데이터를 데이터셋에서 제거할 수 있다. <br>
+            (2) 개별 예제(row)에 데이터가 누락된 칼럼이 많다면, 이 행을 데이터셋에서 제거할 수 있다.<br>
+            (3) 각 칼럼의 결측값을 해당 칼럼의 가장 일반적인 값으로 대체할 수 있다. e.g. mode<br>
+            (4) 별도의 분류 또는 회귀 모델을 학습해 결측 값을 예측할 수 있다. <br>
+
+            ```python
+            dfraw.groupBy(dfraw["workclass"]).count().foreach(print)
+            #Row(workclass='Self-emp-not-inc', count=3862)
+            #Row(workclass='Without-pay', count=21)
+            #Row(workclass='Never-worked', count=10)
+            #Row(workclass='Federal-gov', count=1432)
+            #Row(workclass='Self-emp-inc', count=1695)
+            #Row(workclass='?', count=2799)
+            #Row(workclass='Private', count=33906)
+            #Row(workclass='Local-gov', count=3136)
+            ```
+
+            workclass라는 컬럼의 결측치(?)는 총 2799개이다. 이 열의 최빈값은 Private이다. `DataFrameNafunctions`를 사용해서 imputation을 진행하자.
+
+            ```python
+            dfrawrp = dfraw.na.replace(["?"], ["Private"], ["workclass"])
+            dfrawrpl = dfrawrp.na.replace(["?"], ["Prof-specialty"], ["occupation"])
+            dfrawnona = dfrawrpl.na.replace(["?"], ["United-States"], ["native_country"])
+            ```
+
+        - 범주형 변수 one-hot encoding 해주기
+            <img width="579" alt="Screen Shot 2021-07-04 at 3 32 08 PM" src="https://user-images.githubusercontent.com/43725183/124375413-05e97080-dcdd-11eb-8210-7a58d5ca923b.png">
+
+           
+            1. StringIndexer 사용: String 타입의 범주 값을 해당 값의 정수 번호로 변환한다. 또한  이 방법은 칼럼을 변환하면서 해당 칼럼의 메타데이터를 추가한다. 
+
+                ```python
+                def indexStringColumns(df, cols):
+                    from pyspark.ml.feature import StringIndexer
+                    #variable newdf will be updated several times
+                    newdf = df
+                    for c in cols:
+                        si = StringIndexer(inputCol=c, outputCol=c+"-num")
+                        sm = si.fit(newdf)
+                        newdf = sm.transform(newdf).drop(c)
+                        newdf = newdf.withColumnRenamed(c+"-num", c)
+                    return newdf
+
+                dfnumeric = indexStringColumns(dfrawnona, ["workclass", "education", "marital_status", "occupation", "relationship", "race", "sex", "native_country", "income"])
+                ```
+
+            2. OneHotEncoder로 데이터 인코딩
+
+                ```python
+                def oneHotEncodeColumns(df, cols):
+                    from pyspark.ml.feature import OneHotEncoder
+                    newdf = df
+                    for c in cols:
+                        onehotenc = OneHotEncoder(inputCol=c, outputCol=c+"-onehot", dropLast=False)
+                        newdf = onehotenc.transform(newdf).drop(c)
+                        newdf = newdf.withColumnRenamed(c+"-onehot", c)
+                    return newdf
+
+                dfhot = oneHotEncodeColumns(dfnumeric, ["workclass", "education", "marital_status", "occupation", "relationship", "race", "native_country"])
+                ```
+
+            3. VectorAssembler로 데이터 병합: input data인 labeled point 생성. 
+
+                ```python
+                from pyspark.ml.feature import VectorAssembler
+                va = VectorAssembler(outputCol="features", inputCols=dfhot.columns[0:-1])
+                lpoints = va.transform(dfhot).select("features", "income").withColumnRenamed("income", "label")
+                ```
+
+    2. 로지스틱 회귀 모델 training
+        - 모델 training
+
+            ```python
+            #training data, test data 분리
+            splits = lpoints.randomSplit([0.8, 0.2])
+            adulttrain = splits[0].cache()
+            adultvalid = splits[1].cache()
+
+            from pyspark.ml.classification import LogisticRegression
+            lr = LogisticRegression(regParam=0.01, maxIter=1000, fitIntercept=True)
+            lrmodel = lr.fit(adulttrain)
+            # 아래처럼 직접 fit 메서드에 매개변수들을 지정할 수도 있다. 
+            lrmodel = lr.setParams(regParam=0.01, maxIter=500, fitIntercept=True).fit(adulttrain)
+            ```
+
+        - 가중치(parameter) 해석: 모델의 가중치는 로그 오즈값에 선형적인 영향을 미친다. → 각 가중치에 해당하는 특징 변수 값에 1을 더하고 다른 특징 변수 값은 그대로 유지했을 때 확률 값이 어떻게 달라지는지 살펴본다. 예를 들어 x1에 1을 더하는 것은 곧 오즈에 $e^{w_1}$을 곱하는 것과 같다.
+
+            ```python
+            lrmodel.coefficients
+            #DenseVector([0.0094, 0.0, 0.0002, 0.0, 0.0125, -0.2029, 6.3247, -0.0172, -0.1176, 0.0225, -0.0678, 0.1919, 0.2416, -0.3281, -0.4936, -0.164, -0.0332, 0.323, 0.5022, 0.0676, -0.355, 0.0996, -0.4365, -0.4936, 0.6826, -0.4989, -0.2283, 0.6962, -0.4803, -0.5721, -0.6033, 0.3848, -0.3234, -0.1194, -0.1483, -0.1483, -0.0953, 0.3268, 0.1322, 0.0133, 0.3251, -0.0601, 0.071, -0.3152, -0.1634, -0.0533, -0.3048, -0.347, 0.1842, 0.1318, -0.4862, 0.0414, 0.2727, -0.0799, -0.3659, -0.1996, 0.5765, -0.309, 0.0696, -0.0875, 0.0495, -0.1177, -0.1746])
+            lrmodel.intercept
+            #-5.1669954991723195
+            ```
+
+    3. 모델 evaluation
+        - Confusion matrix
+            <img width="584" alt="Screen Shot 2021-07-04 at 3 31 44 PM" src="https://user-images.githubusercontent.com/43725183/124375399-f2d6a080-dcdc-11eb-9bfa-f12156ded39d.png">  
+
+            
+            - **precision**(정밀도): TP/(TP + FP)
+            - **recall**(재현도): TP/(TP + FN) → 다른 말로 sensitivity(민감도), TPR(True Positive Rate, 진양성률), hit rate(적중률)이라고 한다.
+            - **F-measure**(F 점수): precision과 recall의 조화 평균으로 계산한다 (f1 = 2PR/(P + R)
+        - **Precision-recall curve(= PR curve)**
+            - 확률 임계치(default 0.5)를 높이면 위양성이 줄어들면서 정밀도가 상승한다. 하지만 데이터셋의 실제 양성을 더 적게 식별하므로 재현율이 하락한다. 반대로 임계치를 낮추면 양성(TP, NP)가 많아지므로 정밀도는 떨어지지만 재현율이 상승한다.
+            - PR curve 아래 영역의 면적이 바로 **AUPRC**(Area Under Precision-Recall Curve) 이다.
+        - **ROC(Receiver Operating Characteristic) curve**
+            - TPR(=recall)을 y축에 그리고 FPR을 x 축에 그린다. 여기서 FPR은 FP/(FP + TN)으로 계산한다.
+            - 이상적인 모델은 FPR이 낮고(위양성이 적고) TPR이 높아야(위음성이 적어야)하며, 따라서 ROC 곡선도 왼쪽 위 모서리에 가깝게 그려져야 한다. 대각선에 가까운 ROC 곡선은 모델이 거의 무작위에 가까운 결과를 예측한다는 뜻이다.
+        - BinaryClassificationEvaluator로 AUC, AUPRC 구하기
+
+            ```python
+            validpredicts = lrmodel.transform(adultvalid)
+
+            from pyspark.ml.evaluation import BinaryClassificationEvaluator
+            bceval = BinaryClassificationEvaluator()
+
+            #AUC 구하기
+            bceval.evaluate(validpredicts)
+            bceval.getMetricName()  #areaUnderROC
+
+            #AUPRC 구하기
+            bceval.setMetricName("areaUnderPR")
+            bceval.evaluate(validpredicts)
+            ```
+
+    4. k-fold cross validation
+    → 매개변수 값의 여러 조합을 빠르게 비교할 수 있다. 
+
+        ```python
+        from pyspark.ml.tuning import CrossValidator
+        from pyspark.ml.tuning import ParamGridBuilder
+
+        #k=5로 지정
+        cv = CrossValidator().setEstimator(lr).setEvaluator(bceval).setNumFolds(5)
+
+        #매개변수 값의 조합을 생성
+        paramGrid = ParamGridBuilder().\
+        addGrid(lr.maxIter, [1000]).\
+        addGrid(lr.regParam, [0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5]).build()
+
+        cv.setEstimatorParamMaps(paramGrid)
+        cvmodel = cv.fit(adulttrain)
+
+        #best model의 weight 확인
+        cvmodel.bestModel.weights
+        BinaryClassificationEvaluator().evaluate(cvmodel.bestModel.transform(adultvalid))
+        ```
+
+- 다중 클래스 로지스틱 회귀
+    1. 다중 클래스 로지스틱 회귀 방법 → 생략
+    2. 이진 분류 모델로 One vs. Rest(OVR) 하기
+        - 이 절에서는 handwritten 데이터 셋을 분류하는 예제로 OVR 클래스들의 사용법을 알아본다. 이 데이터는 [http://mng.bz/9jHs에서](http://mng.bz/9jHs에서) 다운로드 받을 수 있으며 0부터 9까지 숫자를 손으로 직접 쓴 샘플 이미지 1만 992개로 구성되어 있다. 각 샘플 이미지에는 밝기 값이 0~100 사이인 픽셀 정보가 16개 저장되어 있다.
+        - 파이썬에서는 OneVsRest를 버전 2.0.0부터 사용할 수 있다.
+
+            ```python
+            penschema = StructType([
+                StructField("pix1",DoubleType(),True),
+                StructField("pix2",DoubleType(),True),
+                StructField("pix3",DoubleType(),True),
+                StructField("pix4",DoubleType(),True),
+                StructField("pix5",DoubleType(),True),
+                StructField("pix6",DoubleType(),True),
+                StructField("pix7",DoubleType(),True),
+                StructField("pix8",DoubleType(),True),
+                StructField("pix9",DoubleType(),True),
+                StructField("pix10",DoubleType(),True),
+                StructField("pix11",DoubleType(),True),
+                StructField("pix12",DoubleType(),True),
+                StructField("pix13",DoubleType(),True),
+                StructField("pix14",DoubleType(),True),
+                StructField("pix15",DoubleType(),True),
+                StructField("pix16",DoubleType(),True),
+                StructField("label",DoubleType(),True)
+            ])
+            pen_raw = sc.textFile("first-edition/ch08/penbased.dat", 4).map(lambda x:  x.split(", ")).map(lambda row: [float(x) for x in row])
+
+            #스파크에 데이터 로드
+            dfpen = sqlContext.createDataFrame(pen_raw.map(Row.fromSeq(_)), penschema)
+            def parseRow(row):
+                d = {("pix"+str(i)): row[i-1] for i in range(1,17)}
+                d.update({"label": row[16]})
+                return Row(**d)
+
+            dfpen = sqlContext.createDataFrame(pen_raw.map(parseRow), penschema)
+            va = VectorAssembler(outputCol="features", inputCols=dfpen.columns[0:-1])
+            penlpoints = va.transform(dfpen).select("features", "label")
+
+            #training dataset과 test dataset으로 분리
+            pensets = penlpoints.randomSplit([0.8, 0.2])
+            pentrain = pensets[0].cache()
+            penvalid = pensets[1].cache()
+
+            penlr = LogisticRegression(regParam=0.01)
+            ```
     </details>
     <details close>
       <summary>8.3. Decision trees and random forests </summary>
+      
+1. Decision tree
+    - decision tree: 과적합 현상에 빠지기 쉬워 입력 데이터에 매우 민감하다.
+        1. 각 변수가 전체 훈련 데이터셋을 얼마나 잘 분류하는지 평가한다. 
+        → impurity와 infromation gain을 기준으로 함.
+            - impurity
+                - entropy: <a href="https://www.codecogs.com/eqnedit.php?latex=H(D)&space;=&space;\Sigma&space;-P(C_j)log_2P(C_j)" target="_blank"><img src="https://latex.codecogs.com/gif.latex?H(D)&space;=&space;\Sigma&space;-P(C_j)log_2P(C_j)" title="H(D) = \Sigma -P(C_j)log_2P(C_j)" /></a>→ 클래스 하나만으로 구성된 데이터셋의 엔트로피는 0이다. 반면 모든 클래스가 균일하게 분포된 데이터셋의 엔트로피가 가장 높다.
+                - gini impurity:<a href="https://www.codecogs.com/eqnedit.php?latex=Gini(D)&space;=&space;1&space;-&space;\Sigma&space;P(C_j)^2" target="_blank"><img src="https://latex.codecogs.com/gif.latex?Gini(D)&space;=&space;1&space;-&space;\Sigma&space;P(C_j)^2" title="Gini(D) = 1 - \Sigma P(C_j)^2" /></a> →  데이터 셋의 실제 레이블 분포에 따라 무작위로 레이블을 예측한다고 가정했을 때 데이터셋에서 무작위로 고른 요소의 레이블을 얼마나 자주 잘못 예측하는지 계산한 척도이다. 지니 불순도도 클래스 하나만으로 구성된 데이터셋의 엔트로피는 0이고, 반면 모든 클래스가 균일하게 분포된 데이터셋의 엔트로피가 가장 높다.
+            - information gain: <a href="https://www.codecogs.com/eqnedit.php?latex=IG(D,F)&space;=&space;I(D)&space;-&space;\Sigma&space;\frac&space;{|D_S|}{|D|}I(D_S)" target="_blank"><img src="https://latex.codecogs.com/gif.latex?IG(D,F)&space;=&space;I(D)&space;-&space;\Sigma&space;\frac&space;{|D_S|}{|D|}I(D_S)" title="IG(D,F) = I(D) - \Sigma \frac {|D_S|}{|D|}I(D_S)" /></a> → 정보 이득은 특징 변수 F로 데이터셋 D를 나누었을 때 예상되는 불순도 감소량이며, 위의 공식에서 I는 불순도이다.
+        2. 최적의 특징 변수, 즉 가장 정보 이득이 큰 특징 변수를 골라 트리 노드를 하나 생성하고, 특징 변수 값에 따라 이 노드에서 다시 새로운 branch를 생성한다. 
+        3. 스파크는 분기가 최대 2개이다.
+        4. 분기에 할당된 데이터셋이 단일 클래스로 이루어져 있거나 분기의 깊이가 일정 이상일때, 해당 분기 노드를 리프 노드(leaf node)로 만들고 이 노드에서 더 이상 새로운 분기를 만들지 않는다. 
+    - 실습
+        - 모델 training
+
+            ```python
+            from pyspark.ml.feature import StringIndexer
+            dtsi = StringIndexer(inputCol="label", outputCol="label-ind")
+            dtsm = dtsi.fit(penlpoints)
+            pendtlpoints = dtsm.transform(penlpoints).drop("label").withColumnRenamed("label-ind", "label")
+
+            #데이터셋 분할
+            pendtsets = pendtlpoints.randomSplit([0.8, 0.2])
+            pendttrain = pendtsets[0].cache()
+            pendtvalid = pendtsets[1].cache()
+
+            from pyspark.ml.classification import DecisionTreeClassifier
+            dt = DecisionTreeClassifier(maxDepth=20)
+            dtmodel = dt.fit(pendttrain)
+            #maxDepth: 트리의 최대 깊이를 지정
+            #maxBins: 연속적인 값을 가지는 특징 변수를 분할할 때 생성할 bin의 최대 개수를 지정한다.
+            #minInstancesPerNode: 데이터셋을 분할할 때 각 분기에 반드시 할당해야 할 데이터 샘플의 최소 개수를 지정한다.
+            #minInfoGain: 데이터셋을 분할할 때 고려할 정보 이득의 최저 값을 지정한다. 분기의 정보 이득이 최저 값보다 낮으면 해당 분기는 버린다. 
+            ```
+
+        - 모델 evaluation
+
+            ```python
+            dtpredicts = dtmodel.transform(pendtvalid)
+            dtresrdd = dtpredicts.select("prediction", "label").rdd.map(lambda row:  (row.prediction, row.label))
+
+            from pyspark.mllib.evaluation import MulticlassMetrics
+            dtmm = MulticlassMetrics(dtresrdd)
+            dtmm.precision()
+            #0.951442968392121
+            print(dtmm.confusionMatrix())
+            ```
+
+2. Random Forest
+    - random forest: 원본 데이터셋을 무작위로 샘플링한 데이터를 사용해 의사결정 트리 여러개를 한꺼번에 학습하는 알고리즘이다.
+    - 실습
+        - 모델 학습
+
+            ```python
+            from pyspark.ml.classification import RandomForestClassifier
+            rf = RandomForestClassifier(maxDepth=20)
+            rfmodel = rf.fit(pendttrain)
+            #numTrees: 학습할 트리 개수 지정
+            #featureSubsetStrategy: 특징 변수 배깅 수행 방식 지정
+            ```
+
+        - 모델 평가
+
+            ```python
+            rfpredicts = rfmodel.transform(pendtvalid)
+            rfresrdd = rfpredicts.select("prediction", "label").rdd.map(lambda row:  (row.prediction, row.label))
+            rfmm = MulticlassMetrics(rfresrdd)
+            rfmm.precision()
+            #0.9894640403114979
+            print(rfmm.confusionMatrix())
+            ```
     </details>
     <details close>
       <summary>8.4. Using k-means clustering </summary>
+      
+* clustering
+    - 군집화를 활용하는 예시
+        - 데이터를 여러 그룹으로 분할: 예를 들어 고객 세분화(customer segmentation)나 유사한 행동을 보인 고객을 그루핑하는 작업
+        - 이미지 세분화(image segmentation): 이미지 하나에서 구분 가능한 영역을 인식하고 분리
+        - 이상 탐지(anomaly detection)
+        - 텍스트 분류(text categorization) 또는 주제 인식(topic recognition)
+        - 검색 결과 그루핑: 예를 들어 yippy 검색 엔진은 검색 결과를 범주 별로 묶어서 보여 준다.
+    - 스파크에는 (1) k-means clustering, (2) 가우스 혼합 모델, (3) 거듭제곱 반복 군집화가 구현되어 있다.
+        - k-means clustering: 이 방법은 군집이 구 형태가 아니거나 크기(밀도 또는 반경)가 동일하지 않을 때는 잘 작동하지 않는다. 또한 범주형 특징 변수를 다룰 수 없다.
+        - 가우스 혼합 모델: 각 군집이 가우스 분포라고 가정하고, 이 분포들의 혼합으로 군집 모형을 만든다.
+        - 거듭제곱 반복 군집화: spectral clustering의 일종으로 9장의 GraphX 라이브러리를 기반으로 구현되었다.
+* k-means clustering
+    - k-means clustering 동작 원리
+        1. 데이터 포인트 k개를 무작위로 선택 → 중심점
+        2. 각 중심점과 모든 포인트 간의 거리를 계산하고, 각 포인트를 가장 가까운 군집에 포함시킴.
+        3. 각 군집의 평균점을 계산해 군집의 새로운 중심점으로 사용.
+        4. 2,3을 반복하다가 새로 게산한 군집 중심점이 이전 중심점과 크게 다르지 않으면 반복과정을 종료함. 
+    - 스파크에서 k-means clustering 사용하기
+        - 먼저 데이터셋을 표준화해야한다.
+        - clustering에서는 훈련 데이터셋과 검증 데이터셋으로 나눌 필요가 없다.
+        - 데이터셋 훈련
+
+            ```python
+            from pyspark.mllib.linalg import DenseVector
+            penflrdd = penlpoints.rdd.map(lambda row: (DenseVector(row.features.toArray()), row.label))
+            penrdd = penflrdd.map(lambda x:  x[0]).cache()
+
+            from pyspark.mllib.clustering import KMeans
+            kmmodel = KMeans.train(penrdd, 10, maxIterations=5000, runs=20)
+            #k: 군집 개수
+            #maxIter: iteration 수(Kmeans reached the max number of iterations 메시지가 출력되면 반복횟수를 늘려야한다)
+            #predictionCol: 예측 결과 칼럼 이름
+            #featureCol: 특징 변수 칼럼 이름
+            #tol: 수렴 허용치 -> 군집의 중심점이 움직인 거리가 이 값보다 작으면 알고리즘이 수렴했다고 판단하고 반복을 종료
+            #seed
+            ```
+
+        - 모델 평가 → 군집 모델 평가는 상당히 어렵다. 정답이 없기 때문이다.
+            - 군집 비용(cost value) 또는 distortion: 각 군집의 중심점과 해당 군집에 포함된 각 데이터 포인트 간 거리를 제곱해 합산한 것.
+
+                ```python
+                kmmodel.computeCost(penrdd)
+                #44421031.53094221
+                ```
+
+            - 군집 중심점과 평균 거리: 군집 비용을 해당 데이터셋의 예제 개수로 나눈 값의 제곱근으로 계산한다.
+
+                ```python
+                import math
+                math.sqrt(kmmodel.computeCost(penrdd)/penrdd.count())
+                #66.94431052265858
+                ```
+
+            - 분할표(contingency table)
+
+                ```python
+                kmpredicts = penflrdd.map(lambda feat_lbl: (float(kmmodel.predict(feat_lbl[0])), feat_lbl[1]))
+
+                def printContingency(rdd, labels):
+                    import operator
+                    numl = len(labels)
+                    tablew = 6*numl + 10
+                    divider = "----------"
+                    for l in labels:
+                        divider += "+-----"
+                    summ = 0L
+                    print("orig.class", end='')
+                    for l in labels:
+                        print("|Pred"+str(l), end='')
+                    print()
+                    print(divider)
+                    labelMap = {}
+                    for l in labels:
+                        #filtering by predicted labels
+                        predCounts = rdd.filter(lambda p:  p[1] == l).countByKey()
+                        #get the cluster with most elements
+                        topLabelCount = sorted(predCounts.items(), key=operator.itemgetter(1), reverse=True)[0]
+                        #if there are two (or more) clusters for the same label
+                        if(topLabelCount[0] in labelMap):
+                            #and the other cluster has fewer elements, replace it
+                            if(labelMap[topLabelCount[0]][1] < topLabelCount[1]):
+                                summ -= labelMap[l][1]
+                                labelMap.update({topLabelCount[0]: (l, topLabelCount[1])})
+                                summ += topLabelCount[1]
+                            #else leave the previous cluster in
+                        else:
+                            labelMap.update({topLabelCount[0]: (l, topLabelCount[1])})
+                            summ += topLabelCount[1]
+                        predictions = iter(sorted(predCounts.items(), key=operator.itemgetter(0)))
+                        predcount = next(predictions)
+                        print("%6d    " % (l), end='')
+                        for predl in labels:
+                            if(predcount[0] == predl):
+                                print("|%5d" % (predcount[1]), end='')
+                                try:
+                                    predcount = next(predictions)
+                                except:
+                                    pass
+                            else:
+                                print("|    0", end='')
+                        print()
+                        print(divider)
+                    print("Purity: %s" % (float(summ)/rdd.count()))
+                    print("Predicted->original label map: %s" % str([str(x[0])+": "+str(x[1][0]) for x in labelMap.items()]))
+
+                printContingency(kmpredicts, range(0, 10))
+                #orig.class|Pred0|Pred1|Pred2|Pred3|Pred4|Pred5|Pred6|Pred7|Pred8|Pred9
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     0    |    1|  638|    0|    7|    0|  352|   14|    2|   23|    0
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     1    |   66|    0|    0|    1|   70|    0|    8|  573|    0|  304
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     2    |    0|    0|    0|    0|    0|    0|    0|   16|    0| 1006
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     3    |    2|    0|    0|    1|  919|    0|    0|   19|    0|    1
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     4    |   31|    0|    0|  940|    1|    0|   42|   12|    0|    1
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     5    |  175|    0|  555|    0|  211|    0|    6|    0|    3|    0
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     6    |    0|    0|    1|    3|    0|    0|  965|    0|    0|    0
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     7    |    0|    0|    4|    1|   70|    0|    1|  147|    1|  805
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     8    |    4|   15|   22|    0|   98|  385|    6|    0|  398|   31
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #     9    |  609|   10|    0|   78|  171|    0|    1|   76|    1|    9
+                #----------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
+                #Purity: 0.666162227603
+                #Predicted->original label map: ['0.0: (9, 609)', '1.0: (0, 638)', '2.0: (5, 555)', '3.0: (4, 940)', '4.0: (3, 919)', '6.0: (6, 965)', '7.0: (1, 573)', '8.0: (8, 398)', '9.0: (2, 1006)']
+                ```
+
+        - 군집개수 결정 → elbow method 사용하기
     </details>
   </blockquote>
 </details>  
