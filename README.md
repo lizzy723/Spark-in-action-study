@@ -835,21 +835,479 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
     <blockquote>
     <details close>
       <summary>5.1. Working with DataFrames </summary>
+      
+스파크에서는 `DataFrame`으로 **정형 데이터(structured data)**(로우와 칼럼으로 구성되며, 각 컬럼 값이 특정 타입으로 제한된 데이터 구조)를 다룰 수 있다. **데이터 프레임을 만드는 방법**은 세가지가 있다: **(1) 기존 RDD를 변환하는 방법**, (2) SQL 쿼리를 실행하는 방법, (3) 외부 데이터에서 로드하는 방법
+
+- `SparkSession`과 `spark.implicits._` 메서드 임포트하기: 스파크 셸을 시작하면 이 코드를 자동으로 실행하지만, 스파크 독립형 프로그램을 작성할 때는 직접 실행해야 한다.
+
+    ```python
+    from pyspark import SparkContext, SparkConf
+    from pyspark.sql import SQLContext
+
+    sc = SparkContext(conf=SparkConf())
+    slContext = SQLContext(sc)
+    ```
+
+- **데이터 프레임 만들기**(→ (1) 기존 RDD에서 DataFrame 생성하기): 예를들어 로그 파일을 DataFrame으로 가져오려면 먼저 파일을 RDD로 로드해 각 줄을 파싱하고, 로그의 각 항목을 구성하는 하위요소를 파악해야 한다. 이러한 정형화 과정을 거쳐야만 로그 데이터를 DataFrame으로 활용할 수 있다. RDD에서 DataFrame을 만드는 방법은 세가지가 있다.
+    1. 로우의 데이터를 튜플 형태로 저장한 RDD를 사용하는 방법
+
+        ```python
+        itPostsRows = sc.textFile("first-edition/ch05/italianPosts.csv")
+        itPostsSplit = itPostsRows.map(lambda x: x.split("~"))
+
+        #array를 tuple로 만들고, 이것을 toDF()로 dataframe 만들기
+        itPostsRDD = itPostsSplit.map(lambda x: (x[0],x[1],x[2],x[3],x[4],x[5],x[6],x[7],x[8],x[9],x[10],x[11],x[12]))
+        itPostsDFrame = itPostsRDD.toDF()
+        itPostsDFrame.show(10)
+        ```
+
+        <img width="1000" alt="Screen Shot 2021-07-29 at 3 58 04 PM" src="https://user-images.githubusercontent.com/43725183/127446251-296f008c-759b-4b60-aab3-95d7ce543391.png">
+
+        ```python
+        #column이름을 인자로 전달하기
+        itPostsDF = itPostsRDD.toDF(["commentCount", "lastActivityDate", "ownerUserId", "body", "score", "creationDate", "viewCount", "title", "tags", "answerCount", "acceptedAnswerId", "postTypeId", "id"])
+
+        #schema 출력하기
+        itPostsDF.printSchema() #-> 현재 모든 컬럼의 타입이 String이며 nullable(Null 값을 허용하는 칼럼)이다. 
+        ```
+
+    2. 케이스 클래스를 사용하는 방법: RDD의 각 row를 case 클래스로 매핑한 후 toDF 메서드를 호출하는 것이다. 
+
+        ```python
+        from pyspark.sql import Row
+        from datetime import datetime
+
+        #안전한 변환(문자열을 각 타입으로 변환할 수 없을때 예외를 던지는 대신 None을 반환한다는 의미)
+        def toIntSafe(inval):
+          try:
+            return int(inval)
+          except ValueError:
+            return None
+
+        def toTimeSafe(inval):
+          try:
+            return datetime.strptime(inval, "%Y-%m-%d %H:%M:%S.%f")
+          except ValueError:
+            return None
+
+        def toLongSafe(inval):
+          try:
+            return int(inval)
+          except ValueError:
+            return None
+
+        #클래스 매핑하기
+        def stringToPost(row):
+          #r = row.encode('utf8').split("~")
+          r = row.split("~")
+          return Row(
+            toIntSafe(r[0]),
+            toTimeSafe(r[1]),
+            toIntSafe(r[2]),
+            r[3],
+            toIntSafe(r[4]),
+            toTimeSafe(r[5]),
+            toIntSafe(r[6]),
+            toIntSafe(r[7]),
+            r[8],
+            toIntSafe(r[9]),
+            toLongSafe(r[10]),
+            toLongSafe(r[11]),
+            int(r[12]))
+
+        rowRDD = itPostsRows.map(lambda x: stringToPost(x))
+        ```
+
+    3. **스키마를 명시적으로 생성하는 방법**(→ 제일 많이 사용하는 방법): 마지막으로 SparkSession의 createDataFrame 메서드를 사용해보자. 이 메서드는 Row 타입의 객체를 포함하는 RDD와 StuctType 객체를 인자로 전달해 호출할 수 있다. StructType은 스파크 SQL의 테이블 스키마를 표현하는 클래스다.  (DataFrame이 지원하는 데이터 타입은 sql.types를 참조하자)
+
+        ```python
+        from pyspark.sql.types import *
+        postSchema = StructType([
+          StructField("commentCount", IntegerType(), True),
+          StructField("lastActivityDate", TimestampType(), True),
+          StructField("ownerUserId", LongType(), True),
+          StructField("body", StringType(), True),
+          StructField("score", IntegerType(), True),
+          StructField("creationDate", TimestampType(), True),
+          StructField("viewCount", IntegerType(), True),
+          StructField("title", StringType(), True),
+          StructField("tags", StringType(), True),
+          StructField("answerCount", IntegerType(), True),
+          StructField("acceptedAnswerId", LongType(), True),
+          StructField("postTypeId", LongType(), True),
+          StructField("id", LongType(), False)
+          ])
+
+        rowRDD = itPostsRows.map(lambda x: stringToPost(x))
+        itPostsDFStruct = sqlContext.createDataFrame(rowRDD, postSchema)
+        itPostsDFStruct.printSchema()
+        ```
+
+        ```python
+        #스키마 정보 가져오기
+        itPostsDFStruct.columns
+        itPostsDFStruct.dtypes
+        ```
+
+- 기본 DataFrame API
+: DataFrame은 RDD를 기반으로 구현해 "불변성"과 "지연 실행"하는 특징이 있다.
+    - 컬럼 선택
+
+        ```python
+        postsDf = itPostsDFStruct
+
+        #컬럼 선택
+        postsIdBody = postsDf.select("id", "body")
+        postsIdBody = postsDf.select(postsDf["id"], postsDf["body"])
+
+        #컬럼 버리기
+        postIds = postsIdBody.drop("body")
+        ```
+
+    - 데이터 필터링
+
+        ```python
+        from pyspark.sql.functions import *
+
+        #Italino라는 단어를 포함하는 포스트 개수를 집계 -> 46
+        postsIdBody.filter(instr(postsIdBody["body"], "Italiano") > 0).count()
+
+        #채택된 답변이 없는 질문만 선택
+        noAnswer = postsDf.filter((postsDf["postTypeId"] == 1) & isnull(postsDf["acceptedAnswerId"]))
+
+        #limit 함수로는 DataFrame의 상위 n개 row를 선택할 수 있다. 
+        firstTenQs = postsDf.filter(postsDf["postTypeId"] == 1).limit(10)
+        ```
+
+    - 컬럼 추가 또는 이름 변경
+
+        ```python
+        #이름 변경: "ownerUserId"을 "owner"로 변경
+        firstTenQsRn = firstTenQs.withColumnRenamed("ownerUserId", "owner")
+
+        #컬럼 추가
+        postsDf.filter(postsDf.postTypeId == 1).\
+        withColumn("ratio", postsDf.viewCount / postsDf.score).\
+        where("ratio < 35").show()
+        ```
+
+    - 데이터 정렬: `orderBy`와 `sort` 함수는 동일하다.
+
+        ```python
+        postsDf.filter(postsDf.postTypeId == 1).\
+        orderBy(postsDf.lastActivityDate.desc()).\
+        limit(10).show()
+        ```
+
+- SQL 함수로 데이터에 연산 수행: 스파크 SQL 함수는 다음 네가지 카테고리로 나눌 수 있다.
+    - **스칼라 함수**: 각 row의 단일 컬럼 또는 여러 컬럼 값을 계산해 단일 값을 반환하는 함수 e.g. abs, exp, substring, length, trim, concat, date_add, year
+
+        ```python
+        from pyspark.sql.functions import *
+        postsDf.filter(postsDf.postTypeId == 1).\
+        withColumn("activePeriod", datediff(postsDf.lastActivityDate, postsDf.creationDate)).\
+        orderBy(desc("activePeriod")).head().body.replace("&lt;","<").replace("&gt;",">")
+        #<p>The plural of <em>braccio</em> is <em>braccia</em>, and the plural of <em>avambraccio</em> is <em>avambracci</em>.</p><p>Why are the plural of those words so different, if they both are referring to parts of the human body, and <em>avambraccio</em> derives from <em>braccio</em>?</p>
+        ```
+
+        head 함수로 첫번째 Row를 드라이버 로컬로 가져온 후 세번째 컬럼인 body의 값을 출력. body 칼럼 내용은 HTML 형식의 테스트여서 가독성을 위해 escape 문자를 다시 특수 문자로 변경함. 
+
+    - **집계 함수**: row의 그룹에서 단일 값을 계산하는 함수. 보통 groupBy와 함께 쓰지만 select이나 withColumn 메서드에 사용하면 전체 데이터셋을 대상으로 집계할 수 있다. e.g. avg, min, max, count, sum
+
+        ```python
+        postsDf.select(avg(postsDf.score), max(postsDf.score), count(postsDf.score)).show()
+        ```
+
+        <img width="595" alt="Screen Shot 2021-07-29 at 3 58 34 PM" src="https://user-images.githubusercontent.com/43725183/127446334-4960073e-7e78-4e2d-a01b-0bb20bd4116b.png">
+
+    - **윈도 함수**: row의 그룹에서 여러 결과 값을 계산하는 함수. 윈도 함수는 집계 함수와 유사하지만, 로우들을 단일 결과로만 그루핑하지 않는다는 점이 다르다. 윈도 함수를 사용하려면 먼저 집계함수나 아래 표에 나열된 함수 중 하나를 사용해 Column 정의를 구성해야 한다. 그 다음 WindowSpec 객체를 생성하고 이를 Column의 over 함수 인자로 전달한다. over 함수는 이 WindowSpec를 사용하는 윈도 칼럼을 정의해 반환한다.
+
+        ```python
+        #example 1
+        from pyspark.sql.window import Window
+
+        winDf = postsDf.filter(postsDf.postTypeId == 1).\
+        select(postsDf.ownerUserId, postsDf.acceptedAnswerId, postsDf.score, max(postsDf.score).over(Window.partitionBy(postsDf.ownerUserId)).\
+        alias("maxPerUser"))
+
+        winDf.withColumn("toMax", winDf.maxPerUser - winDf.score).show(10)
+        ```
+
+        ```python
+        #example 2
+        postsDf.filter(postsDf.postTypeId == 1).\
+        select(postsDf.ownerUserId, postsDf.id, postsDf.creationDate, lag(postsDf.id, 1).over(Window.partitionBy(postsDf.ownerUserId).\
+        orderBy(postsDf.creationDate)).alias("prev"), lead(postsDf.id, 1).\
+        over(Window.partitionBy(postsDf.ownerUserId).\
+        orderBy(postsDf.creationDate)).alias("next")).\
+        orderBy(postsDf.ownerUserId, postsDf.id).show()
+        ```
+
+    - **사용자 정의 함수**: 커스텀 스칼라 함수 또는 커스텀 집계 함수
+
+        ```python
+        #example -> 각 질문에 달린 태그의 개수 세기
+        countTags = udf(lambda (tags): tags.count("&lt;"), IntegerType())
+        postsDf.filter(postsDf.postTypeId == 1).select("tags", countTags(postsDf.tags).alias("tagCnt")).show(10, False)
+        ```
+
+- 결측값 다루기: 결측값을 다루는 다양한 방법이 있지만 보통은 (1) null 또는 NaN 등 결측 값을 가진 로우를 DataFrame에서 제외하거나, (2) 결측 값 대신 다른 상수를 채워 넣거나 결측 값에 준하는 특정 칼럼 값을 다른 상수로 치환하는 방법을 사용한다.
+    - (방법1) `drop` 사용하기: 인수 없이 호출하면 최소 칼럼 하나 이상에 null이나 NaN 값을 가진 모든 **로우를 DataFrame에서 제외할 수 있다.**
+
+        ```python
+        cleanPosts = postsDf.na.drop() #drop("any")를 호출해도 같은 결과!
+        cleanPosts.count()
+
+        #drop("all")은 모든 칼럼 값이 null인 row만 제거한다.
+        #drop(<column name>) 이렇게 특정 칼럼만 지정할 수도 있다.
+        ```
+
+    - (방법2) `fill` 사용하기: 인수를 하나만 지정하면 이 값을 모든 결측값을 대체할 상수로 사용한다. 아래와 같이 특정 컬럼을 지정해서 인자로 전달할 수 도 있다.
+
+        ```python
+        postsDf.na.fill({"viewCount": 0}).show()
+        ```
+
+    - (방법3) `replace` 사용하기: 다음과 같이 특정 컬럼의 특정 값을 다른 값으로 치환할 수 있다. 아래의 경우 id가 1177번인 데이터를 3000번으로 변경.
+
+        ```python
+        postsDf.na.replace(1177, 3000, ["id", "acceptedAnswerId"]).show()
+        ```
+
+- DataFrame을 RDD로 변환: `postsRdd = postsDf.rdd`
+
+    → DataFrame API의 내장 DSL, SQL 함수, 사용자 정의 함수 등으로 거의 모든 매핑 작업을 해결할 수 있기 때무에 DataFrame을 RDD로 변환하고 다시 DataFrame으로 만들어야 할 경우는 거의 없다. 
+
+- 데이터 그루핑: groupBy 함수는 `GroupedData` 객체를 반환한다.
+    - GroupedData는 표준 집계 함수(count, sum, max, min, avg)를 제공한다.
+
+        ```python
+        postsDfNew.\
+        groupBy(postsDfNew.ownerUserId, postsDfNew.tags, postsDfNew.postTypeId).\
+        count().\
+        orderBy(postsDfNew.ownerUserId.desc()).show(10)
+        ```
+
+    - agg 함수를 사용해 서로 다른 컬럼의 여러 집계 연산을 한꺼번에 수행할 수도 있다.
+
+        ```python
+        postsDfNew.\
+        groupBy(postsDfNew.ownerUserId).\
+        agg(max(postsDfNew.lastActivityDate), max(postsDfNew.score)).show(10)
+        ```
+
+    - 스파크 SQL에 내장된 집계 함수 외에도 커스텀 집계 함수를 직접 정의해 사용할 수 있다.
+    - rollup과 cube: groupby는 지정된 칼럼들이 가질 수 있는 값의 모든 조합별로 집계 연산을 수행한다. 반면 rollup와 cube는 지정된 칼럼의 부분 집합을 추가로 사용해 집계 연산을 수행한다.
+        - cube: 칼럼의 모든 combination을 대상으로 계산한다.
+
+            ```python
+            smplDf.cube(smplDf.ownerUserId, smplDf.tags, smplDf.postTypeId).count().show()
+            ```
+
+        - rollup: 지정된 칼럼 순서를 고려한 permutation을 사용한다.
+
+            ```python
+            smplDf.rollup(smplDf.ownerUserId, smplDf.tags, smplDf.postTypeId).count().show()
+            ```
+
+- 데이터 조인: DataFrame을 조인하는 방법은 4장에서 살펴본 RDD 조인 방법과 크게 다르지 않다.
+
+    ```python
+    #먼저 조인할 데이터를 불러와서 dataframe으로 만들자.
+    itVotesRaw = sc.textFile("first-edition/ch05/italianVotes.csv").map(lambda x: x.split("~"))
+    itVotesRows = itVotesRaw.map(lambda row: Row(id=long(row[0]), postId=long(row[1]), voteTypeId=int(row[2]), creationDate=datetime.strptime(row[3], "%Y-%m-%d %H:%M:%S.%f")))
+    votesSchema = StructType([
+      StructField("creationDate", TimestampType(), False),
+      StructField("id", LongType(), False),
+      StructField("postId", LongType(), False),
+      StructField("voteTypeId", IntegerType(), False)
+      ])  
+
+    votesDf = sqlContext.createDataFrame(itVotesRows, votesSchema)
+
+    #inner join
+    postsVotes = postsDf.join(votesDf, postsDf.id == votesDf.postId)
+    #outer join
+    postsVotesOuter = postsDf.join(votesDf, postsDf.id == votesDf.postId, "outer")
+    ```
     </details>
     <details close>
       <summary>5.2. Beyond DataFrames: introducing DataSets </summary>
+      
+스파크 2.0부터는 Dataframe을 Dataset의 일종, 즉 Row 객체를 요소로 포함하는 Dataset으로 구현했다. Dataset의 핵심 아이디어는 "사용자에게 도메인 객체에 대한 변환 연산을 손쉽게 표현할 수 있는 API를 지원함과 동시에, 스파크 SQL 실행엔진의 빠른 성능과 높은 안정성을 제공하는 것"이다. 다시말해 일반 자바 객체를 Dataset에 저장할 수 있고, 스파크 SQL의 텅스텐 엔진과 카탈리스트 최적화를 활용할 수 있다는 의미이다. <br>
+→ Dataset과 RDD는 중복된 기능을 제공하기 때문에 서로 경쟁 관계라고도 볼 수 있다.
     </details>
     <details close>
       <summary>5.3. Using SQL commands </summary>
+      
+DataFrame 데이터에 SQL 쿼리를 실행할 수 있는 세 가지(스파크 프로그램, 스파크 SQL 셸, 스파크 Thrift 서버)를 알아보자. 스파크 SQL은 사용자가 작성한 SQL 명령을 DataFrame 연산으로 변환한다. 따라서 SQL 인터페이스에만 익숙한 사용자들에게 스파크 SQL과 DataFrame을 활용할 수 있는 기회를 제공한다. 스파크가 제공하는 SQL 언어는 스파크 전용 SQL과 하이브 쿼리 언어(Hive Query Language, HQL)이다. 
+→ 스파크 커뮤니티는 더 풍부한 기능을 제공하는 HQL을 권장한다. 스파크에서 하이브 기능을 사용하려면 SparkSession을 구성할 때 SparkSession.Builder 객체의 enableHiveSupport 메서드를 호출해야 한다. (하이브를 지원하는 스파크 셸을 사용하면 셸이 자동으로 하이브 기능을 활성화 한다)
+
+```python
+spark = SparkSession.builder().enableHiveSupport().getOrCreate()
+```
+
+1. 테이블 카탈로그와 하이브 메타 스토어
+    - **테이블 카탈로그(Table catalog)와 하이브 메타 스토어**: DataFrame을 테이블로 등록하면 스파크는 사용자가 등록한 테이블 정보를 테이블 카탈로그(table catalog)에 저장한다. 
+    하이브 지원 기능이 없는 스파크에서는 테이블 카탈로그를 단순한 인-메모리 Map으로 구현한다. 따라서 등록된 테이블 정보를 드라이버의 메모리에만 저장하고, 스파크 세션이 종료되면 같이 사라진다. 반면 하이브를 지원하는 SparkSession에서는 테이블 카탈로그가 하이브 메타스토어를 기반으로 구현되었다. 하이브 메타스토어는 영구적인 데이터베이스로, 스파크 세션을 종료하고 새로 시작해도 DataFrame 정보를 유지한다.
+    - 테이블 임시 등록: 하이브를 지원하는 스파크에서도 임시로 테이블을 저장할 수 있다. 그러고 나면 SQL 인터페이스에서 posts_temp 이름을 참조해 데이터에 질의를 할 수 있다.
+
+        ```python
+        postsDf.registerTempTable("posts_temp")
+        ```
+
+    - 테이블 영구 등록: HiveContext는 metastore_db 폴더 아래 로컬 작업 디렉터리에 Derby 데이터베이스를 생성한다(데이터베이스가 이미 존재하면 이를 재사용한다.) 작업 디렉토리 위치를 변경하려면 hive-site.xml 파일의 hive.metastore.warehouse.dir에 원하는 경로를 지정한다.
+
+        ```python
+        postsDf.write.saveAsTable("posts")
+        votesDf.write.saveAsTable("votes")
+        ```
+
+    - 스파크 테이블 카탈로그
+
+        ```python
+        spark.catalog.listTables().show()  #현재 등록된 테이블 목록 조회
+        #isTemporary: 어떤 테이블이 영구 테이블이고 임시 테이블인지 확인할 수 있음
+        #tableType: MANAGED는 스파크가 해당 테이블의 데이터까지 관리한다는 것을 의미함. EXTERNAL은 데이터를 다른 시스템(e.g. RDBMS)로 관리한다는 뜻.
+        ```
+
+        테이블 정보는 메타스토어 데이터베이스에 등록된다. 데이터베이스의 MANAGED 테이블은 사용자의 홈 디렉토리 아래 spark_warehouse 폴더에 저장된다. 저장 위치를 변경하려면 spark.sql.warehouse.dir 매개변수에 원하는 위치를 설정한다. 
+
+        - 특정 테이블의 칼럼 정보 조회: `spark.catalog.listColumns("votes").show()`
+        - SQL 함수 목록 조회: `spark.catalog.listFunctions.show()`
+        - 테이블을 캐시하거나 삭제: `cacheTable`, `uncacheTable`, `isCached`, `clearCache`
+    - 원격 하이브 메타스토어 설정: 스파크가 원격지의 하이브 메타스토어 데이터베이스를 사용하도록 설정하는 것도 가능하다. 스파크의 원격지 메타스토어로는 기존에 설치한 하이브 메타스토어 데이터베이스를 활용하거나, 스파크가 단독으로 사용할 새로운 데이터베이스를 구축할 수도 있다. 하이브 메타스토어는 스파크 conf 디렉터리 아래에 있는 하이브 설정 파일(hive-site.xml)의 매개변수들로 설정하며, 이 파일을 설정하면 spark.sql.warehouse.dir 매개변수를 오버라이드된다. 스파크가 원격 하이브 메타 스토어를 사용하도록 설정하려면 다음 property들을 hive-site.xml 파일에 추가해야 한다. (property는 configuration 태그 내에 여러개 넣을 수 있다. 각 property tag은 name, value tag로 구성되어 있다)
+        - `javax.jdo.option.ConnectionURL`: JDBC 접속 URL
+        - `javax.jdo.option.ConnectionDriverName`: JDBC 접속 URL
+        - `javax.jdo.option.ConnectionUserName`: JDBC 접속 URL
+        - `javax.jdo.option.ConnectionPassword`: 데이터베이스 사용자 암호
+2. SQL 쿼리 실행: 앞서서 DataFrame을 테이블로 등록하고 나면 이제 SQL 표현식을 사용해 이 데이터에 질의를 실행할 수 있다. 다음과 같이 `sql` 함수를 사용해서 SQL query를 날린다. 쿼리는 하이브 언어 매뉴얼을 참조하자.([https://cwiki.apache.org/confluence/display/Hive/LanguageManual](https://cwiki.apache.org/confluence/display/Hive/LanguageManual))
+
+    ```python
+    resultDf = sqlContext.sql("select * from posts")
+    #resultDf의 type은 DataFrame이다. 
+    ```
+
+    cf. 스파크 SQL 셸 사용하기: 스파크는 스파크 셸 외에도 별도의 SQL 셸을 제공한다. `spark-sql`명령으로 실행하며, spark-shell 및 spark-submit의 인수들을 똑같이 전달할 수 있다. spark-sql 명령을 시작할 때 인수를 전달하지 않으면 SQL 셸을 로컬 모드로 시작한다. (+ query 마지막에 꼭 세미 콜론 붙이기!)
+
+    ```python
+    spark-sql> select substring(title, 0, 70) from posts where postTypeId = 1 order by creationDate desc limit 3;
+
+    # -e 인수를 사용하면 스파크 SQL 셸에 들어가지 않고도 SQL 쿼리를 실행할 수 있다. 
+    $ spark-sql -e "select substring(title, 0, 70) from posts where postTypeId = 1 order by creationDate desc limit 3"
+
+    # -f: 파일에 저장된 SQL 명령을 실행한다.
+    # -i: 초기화 SQL 파일을 지정할 수 있다. 이 초기화 SQL 파일에는 다른 SQL 명령을 실행하기 전에 우선적으로 실행할 명령들을 입력한다. 
+    ```
+
+3. 쓰리프트 서버로 스파크 SQL 접속
+
+    스파크 쓰리프트라는 JDBC( 또는 ODBC) 서버를 이용해 원격지에서 SQL 명령을 실행할 수 있다. JDBC( 또는 ODBC)는 관계형 데이터베이스의 표준 접속 프로토콜이므로 쓰리프트 서버를 이용해 관계형 데이터베이스와 통신할 수 있는 모든 애플리케이션에서 스파크를 사용할 수 있다. 
+
+    쓰리프트 서버는 여러 사용자의 JDBC 및 ODBC 접속을 받아 사용자의 쿼리를 스파크 SQL 세션으로 실행하는 독특한 스파크 애플리케이션이다. 쓰리프트 서버로 전달된 SQL 쿼리는 dataFrame으로 변환한 후 최종적으로 RDD 연산으로 변환해 실행하며, 실행 결과는 다시 JDBC 프로토콜로 반환한다. 
+
+    (자세한 내용은 생략)
     </details>
     <details close>
       <summary>5.4. Saving and loading DataFrame data </summary>
+      
+다양한 소스의 외부 데이터를 로드하고 저장하는 방법을 알아보자.
+
+1. 기본 데이터 소스
+    - 데이터 소스: 스파크는 기본 파일 포맷 및 데이터베이스를 지원한다. 스파크에서는 이를 데이터 소스라고 한다. 데이터 소스에는 JDBC와 하이브를 비롯해 JSON, ORC, Parquet 파일 포맷등이 해당된다. 또 스파크는 MySQL 및 PostgreSQL 관계형 데이터베이스와 스파크를 연동하는 Dialect 클래스도 제공한다.
+    - **JSON** : 외부시스템과 데이터를 주고받는 포맷으로 매우 적합하다. 또한 포맷이 간단하고 사용이 간편하며 사람이 읽을 수 있는 형태로 데이터를 저장한다는 장점이 있다. 그러나 데이터를 영구적으로 저장하는 데 사용하기에는 저장 효율이 떨어진다는 단점이 있다.
+    - **ORC(Optimized Row Columnar)**: 하둡의 표준 데이터 저장 포맷인 RCFile 보다 효율적을 하이브의 데이터를 저장하도록 설계된 파일 포맷이다.([https://cwiki.apache.org/confluence/display/Hive/LanguageManual+ORC](https://cwiki.apache.org/confluence/display/Hive/LanguageManual+ORC))
+        - ORC는 칼럼형 포맷이다. 칼럼형 포맷은 각 로우의 데이터를 순차적으로 저장하는 로우 포맷과 달리 각 칼럼의 데이터를 물리적으로 가까운 위치에 저장하는 방식을 의미한다.
+        - ORC는 로우 데이터를 **스트라이프(stripe)** 여러 개로 묶어서 저장하며, 파일 끝에는 파일 푸터(file footer)와 포스트 스크립트(postscript) 영역이 있다. **파일 푸터**에는 파일의 스트라이프 목록과 스트라이프별 로우 개수, 각 컬럼의 데이터 타입을 저장한다. **포스트 스크립트** 영역에는 파일 압축과 관련된 매개변수들과 파일 푸터의 크기를 저장한다. 스트라이프의 기본 크기는 250MB이다.
+    - **Parquet**: ORC와 마찬가지로 Parquet도 칼럼형 파일 포맷이며 데이터를 압축할 수 있다. 스파크는 Parquet을 기본 데이터 소스로 사용한다.
+2. 데이터 저장
+    - Writer 설정: DataFrameWriter의 각 설정 함수가 현재가지 설정된 DataFrameWriter에 자신에게 전달된 설정을 덧붙여 다시 DataFrameWriter 객체를 반환하므로, 원하는 설정을 하나씩 차례대로 쌓아서 전체 설정 항목을 점진적으로 추가할 수 있다. 다음은 DataFrameWriter 설정함수다.
+        - format: 데이터를 저장할 파일 포맷. 기본 데이터 소스(json, parquet, orc)나 커스텀 데이터 소스 이름을 사용할 수 있다.
+        - mode: 지정된 테이블 또는 파일이 이미 존재하면 이에 대응해 데이터를 저장할 방식을 지정한다. overwrite(기존 데이터를 덮어쓴다), append(기존 데이터에 추가한다), ignore(아무것도 하지않고 저장 요청을 무시한다.), error(예외를 던진다) 중 하나를 지정할 수 있으며, 기본으로는 error가 사용된다.
+        - option과 options: 데이터 소스를 설정할 매개변수 이름과 변수 값을 추가한다.(options는 매개변수의 이름-값 쌍을 Map 형태로 전달한다)
+        - partitionBy: 복수의 파티션 칼럼을 지정한다.
+
+        ```python
+        #example
+        postsDf.write.format("json").saveAsTable("postsjson")
+        ```
+
+    - saveAsTable: 하이브 테이블로 저장, 테이블을 하이브 메타스토어에 등록한다. 저장을 완료하고 하이브 메타스토어를 사용해 이 테이블에 질의를 실행할 수 있다.
+
+        ```python
+        sqlContext.sql("select * from postsjson")
+        ```
+
+    - insertInto: 하이브 테이블로 저장. 이 경우는 이미 하이브 메타스토어에 존재하는 테이블을 지정해야 하며 이 테이블과 새로 저장할 DataFrame 스키마가 서로 같아야 한다.
+    - save: 데이터를 파일에 저장. 데이터를 저장할 경로를 전달하면 스파크 실행자가 구동중인 모든 머신의 로컬 디스크에 파일을 저장한다.
+    - 이 외에 단축 메서드로 데이터를 저장하거나 jdbc 메서드로 관계형 데이터베이스에 데이터를 저장하는 것도 가능하다.
+
+        ```python
+        props = {"user": "user", "password": "password"}
+        postsDf.write.jdbc("jdbc:postgresql:#postgresrv/mydb", "posts", properties=props)
+        ```
+
+3. 데이터 불러오기
+    - DataFrameReader 사용하기: DataFrameReader는 DataFrameWriter와 거의 사용방법이 동일하다.(save 대신 load 사용) 설정함수로 format, option, options를 사용할 수 있다. 반면 DataFrameWriter와 달리 schema 함수로 DataFrame 스키마를 지정할 수 있다. 스파크는 데이터 소스의 스키마를 대부분 자동으로 감지하지만, 스키마를 직접 지정하면 그만큼 연산 속도를 높일 수 있다.
+
+        또한 table 함수를 사용해 하이브 메타 스토어에 등록된 테이블에서 DataFrame을 불러올 수 있다.
+
+        ```python
+        postsDf = sqlContext.read.table("posts")
+        postsDf = sqlContext.table("posts")
+        ```
+
+    - jdbc 메서드로 관계형 데이터베이스에서 데이터 불러오기: DataFrameReader jdbc 함수는 DataFrameWriter jbdc 함수와는 다르게 여러 조건을 사용해 DataFrame으로 불러올 데이터셋의 범위를 좁힐 수 있다
+
+        ```python
+        #example: PostgreSQL 테이블에서 최소 조회 수를 세번 이상 기록한 포스트 불러오기
+        result = sqlContext.read.jdbc("jdbc:postgresql:#postgresrv/mydb", "posts", predicates=["viewCount > 3"], properties=props)
+        ```
+
+    - sql 메서드로 등록한 데이터 소스에서 데이터 불러오기: 임시 테이블을 등록하면 SQL 쿼리에서도 기존 데이터 소스를 참조할 수 있다.
+
+        ```python
+        sqlContext.sql("CREATE TEMPORARY TABLE postsjdbc "+
+          "USING org.apache.spark.sql.jdbc "+
+          "OPTIONS ("+
+            "url 'jdbc:postgresql:#postgresrv/mydb',"+
+            "dbtable 'posts',"+
+            "user 'user',"+
+            "password 'password')")
+
+        sqlContext.sql("CREATE TEMPORARY TABLE postsParquet "+
+          "USING org.apache.spark.sql.parquet "+
+          "OPTIONS (path '/path/to/parquet_file')")
+        resParq = sql("select * from postsParquet")
+        ```
     </details>
      <details close>
       <summary>5.5. Catalyst optimizer </summary>
+       
+- **카탈리스트 최적화 엔진(catalyst optimizer)**: DataFrame DSL과 SQL 표현식을 하위 레벨의 RDD 연산으로 변환한다. 사용자는 카탈리스트를 확장해 다양한 최적화를 추가로 적용할 수 있다.
+
+    <img width="616" alt="Screen Shot 2021-07-29 at 5 52 29 PM" src="https://user-images.githubusercontent.com/43725183/127462469-d86afebc-e131-40c5-9487-faf6e5429001.png">
+
+    이 그림은 카탈리스트 엔진을 최적화하는 과정 전반을 도식화한 것이다. 
+    카탈리스트는 먼저 **(1) parsed logical plan**을 생성한다.  
+    → 쿼리가 참조하는 테이블 이름, 칼럼 이름, 클래스 고유 이름등의 존재여부를 검사하고, (2) **analyzed logical plan**을 생성한다. 
+    → 하위 레벨 연산을 재배치하거나 결합하는 등 여러 방법으로 실행 계획의 최적화를 시도한다. (e.g. 조인할 데이터양을 줄이려고 조인 연산 다음에 사용한 필터링 연산을 조인 앞으로 옮기기도 한다) 최적화 단계를 완료 하면 (3) **optimized logical plan**을 생성한다. 
+    → 마지막으로 카탈리스트는 optimized logical plan에서 실제 (4) **physical plan**을 작성한다. 
+
+- 실행계획 검토: DataFrame의 explain 메서드를 사용해 최적화 결과를 확인하고 실행 계획을 검토할 수 있다. 또한 스파크 웹 UI의 SQL 탭에서 각 쿼리의 Details 컬럼에 있는 +details를 클릭하면 explain과 결과를 유사하게 출력한다.
+
+    ```python
+    postsRatio = postsDf.filter(postsDf.postTypeId == 1).withColumn("ratio", postsDf.viewCount / postsDf.score)
+    postsFiltered = postsRatio.where(postsRatio.ratio < 35)
+    postsFiltered.explain(True)
+    ```
+
+- 파티션 통계 활용: 카탈리스트는 DataFrame의 파티션 내용을 검사하고 각 컬럼의 통계를 계산한 후 이를 활용해 필터링 작업 중 일부 파티션을 건너뛰고 작업 성능을 추가로 최적화한다. 칼럼 통계는 DataFrame을 메모리에 캐시하면 자동으로 계산되므로 사용자가 특별히 해야할 일은 따로 없다. 단지 DataFrame을 메모리에 캐시하는 것이 성능상 좋다는 점만 기억하자.
     </details>
     <details close>
       <summary>5.6. Performance improvements with Tungsten </summary>
+      
+텅스텐 프로젝트는 스파크의 메모리 관리 방식을 완전히 개혁했으며, 정렬, 집계, 셔플링 연산의 성능도 대폭 개선했다. 스파크 버전 1.5부터는 텅스텐을 기본으로 활성화한다. 
     </details>
   </blockquote>
 </details>  
@@ -858,15 +1316,417 @@ cf. **하둡 사용하기**: `hadoop fs`로 시작한다. e.g. `hadoop fs -ls /u
   <blockquote>
     <details close>
       <summary>6.1. Writing Spark Streaming applications </summary>
+      
+- 스파크의 **미니 배치(mini-batch)** 생성
+    - 스파크 스트리밍은 특정 시간 간격 내에 유입된 데이터 블록을 RDD로 구성한다. 그림에서 볼 수 있듯이 다양한 외부 시스템 데이터를 스파크 스트리밍 잡으로 입수할 수 있다. 여기서 말하는 외부 시스템은 단순한 파일 시스템이나 TCP/IP 접속 외에도 카프카, 플럼, 트위터, 아마존 Kinesis 같은 분산 시스템을 의미한다.
+    - 스파크 스트리밍은 각 데이터 소스별로 별도의 리시버를 제공한다. 리시버에는 해당 데이터 소스에 연결하고 데이터를 읽어 들여 스파크 스트리밍에 전달하는 로직이 구현되어 있다. 스파크 스트리밍은 리시버가 읽어 들인 데이터를 미니배치 RDD로 분할하며, 스파크 애플리케이션은 이 미니배치 RDD를 애플리케이션에 구현된 로직(e.g. 머신러닝)에 따라 처리한다.
+    - 미니배치를 처리한 결과는 파일 시스템이나 관계형 데이터베이스 또는 다른 분산 시스템으로 내보낼 수 있다. 이제 예제를 통해 스파크 스트리밍을 알아보자.
+
+    <img width="503" alt="Screen Shot 2021-07-29 at 5 55 11 PM" src="https://user-images.githubusercontent.com/43725183/127462888-db75e803-f327-4b53-8054-60c2d028321b.png">
+
+1. 스트리밍 컨텍스트 생성
+    - 어떤 클러스터를 사용하든 반드시 코어를 두 개 이상 실행자에 할당해야 한다. 스파크 스트리밍의 각 리시버가 입력 데이터 스트림을 처리하려면 코어(엄밀히 말하면 thread)를 각각 한 개씩 사용해야 하며, 별도로 최소 코어 한 개 이상이 프로그램 연산을 하는 데 필요하다.
+    - StreamingContext 인스턴스 만들기: 지금은 우선 Duration을 5초로 설정했다.
+
+        ```python
+        from pyspark.streaming import StreamingContext
+
+        ssc = StreamingContext(sc, 5)
+        #SparkContext 객체와 Duration을 인자로 넣어준다. 
+        ```
+
+2. 파일의 스트림 데이터 읽고 저장하기.
+    - StreamingContext의 `textFileStream`: 지정된 디렉터리를 모니터링하고, 디렉터리에 새로 생성된 파일을 개별적으로 읽어들인다. textFileStream이 새로 생성된 파일을 읽어 들인다는 것은 StreamingContext를 시작할 시점에 이미 폴더에 있던 파일은 처리하지 않는다는 것을 의미한다. (+ 파일에 데이터를 추가해도 읽어들이지 않는다.)
+    → 리눅스 쉘 스크립트(`splitAndSend.sh`)로 스트리밍 데이터를 임의로 생성하자. 이 스크립트는 압축을 해제한 데이터 파일을 파일 50개로 분할한 후, 분할한 파일을 HDFS 디렉터리에 3초 주기로 하나씩 복사한다. (실제 운영 환경에서도 이러한 방식으로 데이터를 전송할 때가 많다)
+    - 입력폴더 지정: `filestream = ssc.textFileStream("/home/spark/ch06input")`
+    → `filestream`은 DStream 클래스이다. RDD와 마찬가지로 DStream은 다른 DStream으로 변환하는 다양한 메서드를 제공한다. e.g. 필터링, 매핑, 리듀스, 조인 등
+    - 실습 예제: map 대신 flatMap을 사용하는 이유는 포맷이 맞지 않는 데이터를 건너뛰기 위함이다.
+
+        ```python
+        from datetime import datetime
+        def parseOrder(line):
+          s = line.split(",")
+          try:
+              if s[6] != "B" and s[6] != "S":
+                raise Exception('Wrong format')
+              return [{"time": datetime.strptime(s[0], "%Y-%m-%d %H:%M:%S"), "orderId": long(s[1]), "clientId": long(s[2]), "symbol": s[3],
+              "amount": int(s[4]), "price": float(s[5]), "buy": s[6] == "B"}]
+          except Exception as err:
+              print("Wrong line format (%s): " % line)
+              return []
+
+        orders = filestream.flatMap(parseOrder)
+
+        from operator import add
+        numPerType = orders.map(lambda o: (o['buy'], 1L)).reduceByKey(add)
+        ```
+
+    - 결과를 파일로 저장: saveAsTextFiles는 prefix 문자열과 suffix 문자열을 받아 데이터를 주기적으로 저장할 경로를 구성한다. 각 미니배치 RDD의 데이터는 <prefix>-<밀리초 단위 시각>.<접미 문자열>  폴더에 저장된다. 즉, 미니배치 RDD의 주기(e.g. 5초)마다 새로운 디렉터리를 생성한다는 의미이다.
+
+        ```python
+        numPerType.repartition(1).saveAsTextFiles("/home/spark/ch06output/output", "txt")
+        ```
+
+    - 스트리밍 계산 작업의 시작과 종료
+
+        ```python
+        ssc.start()  #(1) 스트리밍 컨텍스트 시작
+        ```
+
+        ```bash
+        #(2)스트리밍 데이터 생성
+        $ chmod +x ch06/splitAndSend.sh
+        $ mkdir /home/spark/ch06input
+        $ cd ch06
+        $ ./splitAndSend.sh /home/spark/ch06input local  #local 파일 시스템의 폴더를 사용할때는 반드시 local 인수를 추가해야 한다. 
+        ```
+
+        스크립트는 orders.txt 파일을 분할하고 지정된 폴더로 하나씩 복사한다. 스트리밍 애플리케이션은 이 파일들을 자동으로 읽어 들여 주문 건수를 집계한다. 
+
+        ```python
+        #(3)실행중인 스트리밍 컨텍스트를 셸에서 중지하기.
+        ssc.stop(False)  #False -> 스파크 컨텍스트는 중지x
+        ```
+
+    - 결과 확인: 여러 파일(part-00000)로 나눠져 있어도 *를 사용하면 하나의 객체에 모두 읽을 수 있다.
+
+        ```bash
+        allCounts = sc.textFile("/home/spark/ch06output/output*.txt")
+        ```
+
+3. 시간에 따라 변화하는 계산 상태 저장
+
+- 스파크 스트리밍에서는 계산 상태를 갱신하는 여러 메서드를 사용해 과거 데이터와 현재 미니배치의 새로운 데이터를 결합하고, 훨씬 더 강력한 스트리밍 프로그램을 만들 수 있다.
+
+    <img width="471" alt="Screen Shot 2021-07-29 at 5 54 27 PM" src="https://user-images.githubusercontent.com/43725183/127462789-916d55ce-265d-480f-ae3e-ae536de83c79.png">
+
+- 과거의 계산 상태를 현재 계산에 반영할 수 있는 `updateStateBykey`와 `mapWithState` 메서드를 제공한다. 두 메서드 모두 키-값 튜플로 구성된 Pair DStream에서만 이 메서드를 사용할 수 있다.
+    - `updateStateBykey`
+
+        ```python
+        #step 1
+        #Pair DStream 생성: 키(고객 ID), 값(거래액 = 주문 수량*매매가격)
+        amountPerClient = orders.map(lambda o: (o['clientId'], o['amount']*o['price']))
+
+        #step 2
+        #amountPerClient DStream에 updateStateByKey 메서드를 적용해 StateDStream을 생성
+        amountState = amountPerClient.updateStateByKey(lambda vals, totalOpt: sum(vals)+totalOpt if totalOpt != None else sum(vals))
+        # 이 키의 상태가 이미 존재할 때는 상태 값에 새로 유입된 값의 합계를 더한다. 반면 이전 상태 값이 없을 때는 새로 유입된 값의 합계만 반환한다. 
+
+        #step 3
+        #거래액 1~5위 고객 계산 -> DStream의 각 RDD를 정렬한 후 각 RDD에서 상위 다섯개 요소만 남김.
+        top5clients = amountState.transform(lambda rdd: rdd.sortBy(lambda x: x[1], False).map(lambda x: x[0]).zipWithIndex().filter(lambda x: x[1] < 5))
+
+        #step 4
+        #초당 거래 주문 건수와 거래액 1~5위 고객 결과를 배치 간격당 한 번씩만 저장하려면, 두 결과 DStream을 단일 DStream으로 병합해야 한다. 
+        #join, cogroup, union 사용가능. 
+        # 먼저 요소타입을 동일하게 맞춤
+        buySellList = numPerType.map(lambda t: ("BUYS", [str(t[1])]) if t[0] else ("SELLS", [str(t[1])]) )
+        top5clList = top5clients.repartition(1).map(lambda x: str(x[0])).glom().map(lambda arr: ("TOP5CLIENTS", arr))
+
+        #그리고 두 DStream 합침
+        finalStream = buySellList.union(top5clList)
+
+        #step 5
+        #병합된 파일 저장
+        finalStream.repartition(1).saveAsTextFiles("/home/spark/ch06output/output", "txt")
+
+        #step 6
+        #updateStateByKey 메서드를 사용할 때는 메서드가 반환하는 State DStream에 체크포인팅을 반드시 적용해야 한다. 
+        sc.setCheckpointDir("/home/spark/checkpoint/")
+        ```
+
+    - `mapWithState` : updateStateByKey와 mapWithState의 가장 큰 차이점은 상태 값의 타입과 반환 값의 타입을 다르게 적용할 수 있다는 것이다.
+
+        `mapWithState`는 기능뿐만 아니라 성능 면에서도 우수하다. `mapWithState`는 `updateStateByKey` 보다 키별 상태를 열 배 더 많이 유지할 수 있으며, 처리 속도는 여섯배나 빠르다. → 자세한 내용은 생략
+
+4. 전체 코드 실행: 스트리밍 컨텍스트를 시작한 후 `splitAndSend.sh` 스크립트를 재실행하면 출력폴더와 part-00000 파일이 생성된다. 
+
+```python
+from pyspark.streaming import StreamingContext
+ssc = StreamingContext(sc, 5)
+filestream = ssc.textFileStream("/home/spark/ch06input")
+
+from datetime import datetime
+def parseOrder(line):
+  s = line.split(",")
+  try:
+      if s[6] != "B" and s[6] != "S":
+        raise Exception('Wrong format')
+      return [{"time": datetime.strptime(s[0], "%Y-%m-%d %H:%M:%S"), "orderId": long(s[1]), "clientId": long(s[2]), "symbol": s[3],
+      "amount": int(s[4]), "price": float(s[5]), "buy": s[6] == "B"}]
+  except Exception as err:
+      print("Wrong line format (%s): " % line)
+      return []
+
+orders = filestream.flatMap(parseOrder)
+from operator import add
+numPerType = orders.map(lambda o: (o['buy'], 1L)).reduceByKey(add)
+
+amountPerClient = orders.map(lambda o: (o['clientId'], o['amount']*o['price']))
+
+amountState = amountPerClient.updateStateByKey(lambda vals, totalOpt: sum(vals)+totalOpt if totalOpt != None else sum(vals))
+top5clients = amountState.transform(lambda rdd: rdd.sortBy(lambda x: x[1], False).map(lambda x: x[0]).zipWithIndex().filter(lambda x: x[1] < 5))
+
+buySellList = numPerType.map(lambda t: ("BUYS", [str(t[1])]) if t[0] else ("SELLS", [str(t[1])]) )
+top5clList = top5clients.repartition(1).map(lambda x: str(x[0])).glom().map(lambda arr: ("TOP5CLIENTS", arr))
+
+finalStream = buySellList.union(top5clList)
+
+finalStream.repartition(1).saveAsTextFiles("/home/spark/ch06output/output", "txt")
+
+sc.setCheckpointDir("/home/spark/checkpoint/")
+
+ssc.start()
+```
+
+5. 윈도 연산: 일정 시간동안 유입된 데이터만 계산하기. 윈도 연산은 미니배치의 슬라이딩 윈도(sliding window)를 기반으로 수행한다. 스파크 스트리밍은 슬라이딩 윈도의 길이(window duration)와 이동거리(slide duration)즉, 윈도 데이터를 얼마나 자주 계산할지)를 바탕으로 윈도 DStream을 생성한다. 슬라이딩 윈도의 길이와 이동 거리는 반드시 미니배치 주기의 배수여야 한다.  → 결과는 윈도우당 하나씩  계산된다. 
+
+<img width="529" alt="Screen Shot 2021-07-29 at 5 53 58 PM" src="https://user-images.githubusercontent.com/43725183/127462697-588c8d91-4fa6-49d4-9696-abb15bebe51e.png">
+
+- 예제: 지난 한 시간동안 거래된 각 유가 증권별 거래량을 집계해야 한다. (→ 윈도 길이가 1시간) 이동거리는 각 미니배치 별로 계산해야 하기 때문에 미니배치 주기와 동일하게 5초로 설정한다.
+- 윈도 DStream 생성하기
+    - `reduceByKeyAndWindow`: 리듀스 함수와 윈도 길이를 지정한다. 이 메서드는 윈도 DStream을 생성하고 데이터를 리듀스 함수에 전달한다. reduceByKeyAndWindow 대신 아래와 같이 window 메서드를 호출한 결과에 reduceByKey 메서드를 호출해도 같은 결과를 얻을 수 있다.
+
+        ```python
+        stocksWindow = orders.map(lambda x: (x['symbol'], x['amount'])).window(60*60)
+        stocksPerWindow = stocksWindow.reduceByKey(add)
+
+        topStocks = stocksPerWindow.transform(lambda rdd: rdd.sortBy(lambda x: x[1], False).map(lambda x: x[0]).\
+        zipWithIndex().filter(lambda x: x[1] < 5)).repartition(1).\
+        map(lambda x: str(x[0])).glom().\
+        map(lambda arr: ("TOP5STOCKS", arr))
+        ```
+
+    - 다른 윈도 연산자
+
+        <img width="463" alt="Screen Shot 2021-07-29 at 5 53 33 PM" src="https://user-images.githubusercontent.com/43725183/127462631-e88b382e-8d19-44b5-8543-7422a31bdcf6.png">
+
+6. 그 외 내장 입력 스트림: 스파크 스트리밍에는 textFileStream 외에도 다양한 메서드로 데이터를 수신하고 DStream을 생성할 수 있다.
+
+- 파일 입력 스트림: `binaryRecordsStream`, `fileStream`이 있다. `textFileStream`과 마찬가지로 특정 폴더 아래 새로 생성된 파일들을 읽어들인다. 차이점은 텍스트 외 다른 유형의 파일을 읽을 수 있다는 것이다.
+- 소켓 입력 스트림: 스파크 스트리밍을 사용해 TCP/IP 소켓에서 바로 데이터를 수신할 수도 있다. `socketStream` 과 `socketTextStream`이 있다.
     </details>
     <details close>
       <summary>6.2. Using external data sources </summary>
+      
+지금까지 스파크 스트리밍의 내장 데이터 소스(파일 및 소켓)을 사용하는 방법을 살펴보았다. 이제 외부 데이터 소스에 연결해보자. 스파크가 공식적으로 커넥터를 지원하는 외부시스템 및 프로토콜에는 **카프카(kafka), 플럼(flume), 아마존 kinesis, 트위터, ZeroMQ, MQTT**가 있다. 
+→ 이 절에서는 매매주분 데이터를 파일에서 직접 읽어들이는 대신 또 다른 셸 스크립트를 사용해 파일의 주문 데이터를 카프카 토픽으로 전송한다. 스파크 스트리밍 애플리케이션은 이 토픽에서 주문 데이터를 읽어 들이고, 각 지표의 계산 결과를 다시 또 다른 카프카 토픽으로 전송한다. 그런 다음 카프카의 컨슈머 스크립트(kafka-console-consumer.sh)를 사용해 지표 결과를 수신하고 출력한다. 
+
+1. 카프카 시작
+    - 카프카 설치: 카프카 버전은 반드시 스파크 버전과 호환되는 것을 선택한다.
+
+        ```bash
+        #binary file 다운로드 https://kafka.apache.org/downloads
+        $ tar -xvfz kafka_2.12-2.8.0.tgz
+        ```
+
+    - 주키퍼 시작하기: 카프카는 아파치 주키퍼를 사용한다. 주키퍼는 분산 프로세스를 안정적으로 조율할 수 있는 오픈소스 서버 소프트웨어이다.
+
+        ```bash
+        $ cd ~/bin/kafka_2.12-2.8.0
+        $ bin/zookeeper-server-start.sh config/zookeeper.properties & 
+        #port 2181번
+        ```
+
+    - 카프카 시작
+
+        ```bash
+        $ bin/kafka-server-start.sh config/server.properties & 
+        ```
+
+    - 거래 주문 데이터를 전송할 토픽(orders)와 지표 데이터를 전송할 토픽(metrics)를 생성하자.
+
+        ```bash
+        $ bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 1 --partitions 1 --topic orders
+        $ bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 1 --partitions 1 --topic metrics
+        $ bin/kafka-topics.sh --list --zookeeper localhost:2181
+        #metrics
+        #orders
+        ```
+
+2. 카프카를 사용해 스트리밍 애플리케이션 개발
+    - 셸 시작하기: (1) 카프카 라이브러리와 (2) 스파크-카프카 커넥터 라이브러리를 스파크 셸의 클래스 패스에 추가해 시작하자. 각 라이브러리의 JAR 파일을 지겁 내려받을 수도 있지만, 다음과 같이 packages 매개변수를 지정하면 스파크는 JAR 파일을 자동으로 내려받아 사용한다.
+
+        ```bash
+        $ spark-shell --master local[4] \
+        --packages org.apache.spark:spark-streaming-kafka-0-8_2.11:2.0.0,\
+        org.apache.kafka:kafka_2.11:0.8.2.1
+        ```
+
+        반면 스파크 독립형 애플리케이션을 메이븐 프로젝트로 빌드할 때는 애플리케이션의 pom.xml 파일에 다음 의존 라이브러리를 추가하면 된다. 
+
+        ```xml
+        <dependency>
+        	<groupId>org.apache.spark</groupId>
+        	<artifactId>spark-streaming-kafka-0-8_2.11</artifactId>
+        	<version>2.0.0</version>
+        </dependency>
+        <dependency>
+        	<groupId>org.apache.kafka</groupId>
+        	<artifactId>kafka_2.11</artifactId>
+        	<version>0.8.2.1</version>
+        </dependency>
+        ```
+
+    - 스파크-카프카 커넥터 사용
+        - 스파크-카프카 커넥터에는 (1) 리시버 기반 커넥터(receiver-based connector)와 (2) 다이렉트 커넥터(direct connector)가 있다.
+            - **리시버 기반 커넥터(receiver-based connector)**: 간혹 메시지 한 개를 여러번 읽어오기도 한다. 또한 연산 성능이 다소 떨어진다는 단점이 있다.
+            - **다이렉트 커넥터(direct connector)**: 입력된 메시지를 정확히 한번 처리함.
+        - 카프카 설정에 필요한 매개변수 설정: 카프카 토픽의 데이터를 읽어 DStream을 생성하려면, 먼저 카프카 설정에 필요한 매개변수들을 Map 객체로 구성해야 한다. 이 Map에는 최소한 카프카 브로커(broker) 주소를 가리키는 metadata.broker.list 매개변수를 반드시 포함해야 한다.
+        - 위의 Map 매개변수와 스트리밍 컨텍스트 객체, 그리고 접속할 카프카 토픽 이름을 담은 Set 객체를 KafkaUtils.createDirectStream 메서드에 전달한다. 또 메시지의 키 클래스, 값 클래스, 키의 디코더 클래스, 값의 디코더 클래스를 createDirectStream 메서드의 타입 매개 변수로 전달해야 한다. 예제에서는 키와 값이 문자열 타입이므로 카프카의 StringDecoder 클래스를 키와 값의 디코더로 사용할 수 있다.
+
+            ```python
+            kafkaReceiverParams = {"metadata.broker.list": "192.168.10.2:9092"}
+            kafkaStream = KafkaUtils.createDirectStream(ssc, ["orders"], kafkaReceiverParams)
+            ```
+
+        - 리시버 기반 커넥터는 마지막으로 가져온 메시지의 오프셋을 주키퍼에 저장하지만 다이렉트 커넥터는 주키퍼 대신 스파크 체크포인팅 디렉터리에 오프셋을 저장한다. 마지막으로 가져온 메시지의 오프셋이 없을 경우 auto.offset.reset 매개변수로 어떤 메시지부터 가져올지 지정할 수 있다(Map 매개변수에 같이 저장하면 된다). 이 값을 smallest로 설정하면 가장 작은 오프셋의 데이터부터 가져온다. 매개변수를 설정하지 않으면 가장 최신의 메시지를 가져온다.
+        - 이렇게 생성한 kafkaStream 객체를 앞서 사용한 fileStream과 거의 동일한 방식으로 사용할 수 있다. 유일한 차이점은 DStream 요소의 타입으로 fileStream이 문자열 요소로 구성된 반면 kafkaStream의 각 요소는 두 문자열(키와 메시지)로 구성된 튜플이다.
+    - 카프카로 메시지 전송: 이전에서는 지표 계산 결과를 담은 finalStream DStream을 파일에 저장했다. 이 절에서는 파일 대신 카프카 토픽으로 결과를 전송한다. 스파크 스트리밍에서 카프카로 메시지를 전송하는 기능은 DStream의 `foreachRDD` 메서드로 구현할 수 있다. 이 메서드는 임의의 함수를 DStream의 각 RDD 별로 실행한다. 
+    카프카에 메시지를 전송하려면 카프카의 Producer객체를 사용해야 한다. Producer 객체는 카프카 브로커에 접속하고, KeyedMessage 객체의 형태로 구성한 메시지를 카프카토픽으로 전송한다. 카프카의 ProducerConfig 객체로 Producer를 설정하고 사용할 수 있다.
+    → 직렬화가 불가능한 Producer 객체를 사용할때는 다음과 같이 KafkaProducerWrapper 클래스를 정의하고 이 클래스의 동반 객체로 싱글톤 객체를 생성할 수 있다.
+
+        ```python
+        from kafka import KafkaProducer
+        class KafkaProducerWrapper(object):
+          producer = None
+          @staticmethod
+          def getProducer(brokerList):
+            if KafkaProducerWrapper.producer != None:
+              return KafkaProducerWrapper.producer
+            else:
+              KafkaProducerWrapper.producer = KafkaProducer(bootstrap_servers=brokerList, key_serializer=str.encode, value_serializer=str.encode)
+              return KafkaProducerWrapper.producer
+        ```
+
+        (2장에서 설명했듯이) 동반 객체를 동일한 이름의 클래스를 선언한 파일 내에 나란히 선언해야 한다. 우리는 스파크 셸이 이 객체를 드라이버에서 초기화하고 직렬화하지 않도록 KafkaProducerWrapper 클래스를 JAR 파일로 컴파일해 사용한다. 
+
+        ```bash
+        $ spark-shell --master local[4] \
+        --packages org.apache.spark:spark-streaming-kafka-0-8_2.11:2.0.0,\
+        org.apache.kafka:kafka_2.11:0.8.2.1
+        --jars first-edirion/ch06/kafkaProducerWrapper.jar
+
+        #파이썬에서는 두 라이브러리 중 첫 번째만 전달해도 된다.
+        $ spark-shell --master local[4] \
+        --packages org.apache.spark:spark-streaming-kafka-0-8_2.11:2.0.0 \
+        --jars first-edirion/ch06/kafkaProducerWrapper.jar
+        #그 대신 kafka-python 패키지를 설치해야 한다.
+        pip install kafka-python
+        ```
+
+    - 예제 실행
+        - 셸1) orders.txt 파일의 각 줄을 0.1초마다 카프카의 orders 토픽으로 전송하는 streamOrders.sh 스크립트를 실행한다. (`chmod +x streamOrders.sh`하고 실행하기/kafka의 bin 디렉터리를 사용자의 path에 추가해야 한다. )
+
+            ```bash
+            $ ./streamOrders.sh 192.168.10.2:9092
+            ```
+
+        - 셸2) 스트리밍 프로그램의 결과를 확인한다. 다음의 코드로 metrics 토픽으로 유입된 메시지를 볼 수 있다.
+
+            ```bash
+            $ kafka-console-consumer.sh --zookeeper localhost:2181 --topic metrics
+            ```
+
+        - 전체 코드
+
+            ```python
+            from pyspark.streaming import StreamingContext
+            from pyspark.streaming.kafka import KafkaUtils
+            from kafka import KafkaProducer
+            from kafka.errors import KafkaError
+
+            ssc = StreamingContext(sc, 5)
+
+            kafkaReceiverParams = {"metadata.broker.list": "192.168.10.2:9092"}
+            kafkaStream = KafkaUtils.createDirectStream(ssc, ["orders"], kafkaReceiverParams)
+
+            from datetime import datetime
+            def parseOrder(line):
+              s = line[1].split(",")
+              try:
+                  if s[6] != "B" and s[6] != "S":
+                    raise Exception('Wrong format')
+                  return [{"time": datetime.strptime(s[0], "%Y-%m-%d %H:%M:%S"), "orderId": long(s[1]), "clientId": long(s[2]), "symbol": s[3],
+                  "amount": int(s[4]), "price": float(s[5]), "buy": s[6] == "B"}]
+              except Exception as err:
+                  print("Wrong line format (%s): " % line)
+                  return []
+
+            orders = kafkaStream.flatMap(parseOrder)
+            from operator import add
+            numPerType = orders.map(lambda o: (o['buy'], 1L)).reduceByKey(add)
+
+            amountPerClient = orders.map(lambda o: (o['clientId'], o['amount']*o['price']))
+
+            amountState = amountPerClient.updateStateByKey(lambda vals, totalOpt: sum(vals)+totalOpt if totalOpt != None else sum(vals))
+            top5clients = amountState.transform(lambda rdd: rdd.sortBy(lambda x: x[1], ascending=False).map(lambda x: x[0]).zipWithIndex().filter(lambda x: x[1] < 5))
+
+            buySellList = numPerType.map(lambda t: ("BUYS", [str(t[1])]) if t[0] else ("SELLS", [str(t[1])]) )
+            top5clList = top5clients.repartition(1).map(lambda x: str(x[0])).glom().map(lambda arr: ("TOP5CLIENTS", arr))
+
+            stocksPerWindow = orders.map(lambda x: (x['symbol'], x['amount'])).reduceByKeyAndWindow(add, None, 60*60)
+            stocksSorted = stocksPerWindow.transform(lambda rdd: rdd.sortBy(lambda x: x[1], ascending=False).map(lambda x: x[0]).zipWithIndex().filter(lambda x: x[1] < 5))
+            topStocks = stocksSorted.repartition(1).map(lambda x: str(x[0])).glom().map(lambda arr: ("TOP5STOCKS", arr))
+
+            finalStream = buySellList.union(top5clList).union(topStocks)
+            finalStream.foreachRDD(lambda rdd: rdd.foreach(print))
+
+            def sendMetrics(itr):
+              prod = KafkaProducerWrapper.getProducer(["192.168.10.2:9092"])
+              for m in itr:
+                prod.send("metrics", key=m[0], value=m[0]+","+str(m[1]))
+              prod.flush()
+
+            finalStream.foreachRDD(lambda rdd: rdd.foreachPartition(sendMetrics))
+
+            sc.setCheckpointDir("/home/spark/checkpoint/")
+
+            ssc.start()
+            ```
     </details>
     <details close>
       <summary>6.3. Performance of Spark Streaming jobs </summary>
+      
+일반적으로 스트리밍 애플리케이션은 다음과 같은 요구사항을 갖춰야 한다.
+
+1. 각 입력 레코드를 최대한 빨리 처리한다.(낮은 지연 시간)
+2. 실시간 데이터의 유량 증가에 뒤처지지 않는다(확장성)
+3. 일부 노드에 장애가 발생해도 유실 없이 계속 데이터를 입수한다(장애 내성)
+
+- 미니배치 주기 결정: 스파크 웹 UI streaming 페이지에서 (1) **input rate**(유입 속도-초당 유입된 레코드 개수를 보여준다),  (2) **scheduling delay**(스케줄링 지연 시간-새로운 미니배치의 잡을 스케줄링할 때까지 걸린 시간을 보여준다), (3) **processing time**(처리 시간-각 미니배치의 잡을 처리하는데 걸린 시간을 보여준다), (4) **total delay**(총 지연 시간-각 미니배치를 처리하는 데 소요된 총 시간을 보여준다. )을 확인할 수 있다.
+
+    <img width="502" alt="Screen Shot 2021-07-29 at 5 56 16 PM" src="https://user-images.githubusercontent.com/43725183/127463059-f32bfb1b-a336-4b94-a443-81eab6e35184.png">
+
+    → 미니배치당 총 처리시간(즉, 총 지연 시간)은 미니배치 주기보다 짧아야 하며, 일정한 값으로 유지해야한다. 반면 총 처리 시간이 계속 증가하면 스트리밍 연산을 장기적으로 지속할 수 없다. 이 문제를 해결하려면 (1) **처리 시간을 단축**하거나 (2) **병렬화를 확대**하거나 (3) **유입속도를 제한**해야 한다.
+
+    - 처리시간 단축: 스케줄링이 지연되면 가장 먼저 스트리밍 프로그램의 최적화를 시도해 배치당 처리 시간을 최대한 단축해야한다. 또는 미니배치 주기를 더 길게 늘릴 수도 있다. 또는 클러스터 리소스를 추가로 투입해 처리 시간을 단축할 수도 있다.
+    - 병렬화 확대: 모든 CPU 코어를 효율적으로 활용하고 처리량을 늘리려면 결국 병렬화를 확대해야 한다.
+    - 유입속도 제한: 더 이상 처리 시간을 줄이거나 병렬화를 확대할 수 없음에도 여전히 스케줄링 지연 시간이 증가한다면, 마지막 처방은 데이터가 유입되는 속도를 제한하는 것이다.
+- 장애 내성
+    - 실행자의 장애 복구: 데이터가 실행자 프로세스에서 구동되는 리시버로 유입되면 스파크는 이 데이터를 클러스터에 중복 저장한다. 따라서 리시버의 실행자에 장애가 발생해도 다른 노드에서 실행자를 재시작하고 유실된 데이터를 복구할 수 있다. 스파크는 이러한 과정을 자동으로 처리하므로 사용자가 특별히 할 일은 없다.
+    - 드라이버의 장애 복구: 드라이버 프로세스가 실패하면 실행자 연결이 끊어지므로 애플리케이션 자체를 재시작해야 한다. 드라이버 프로세스를 재시작하면 스파크 스트리밍은 체크 포인트에 저장된 스트리밍 컨텍스트의 상태를 읽어들여 스트리밍 애플리케이션의 마지막 상태를 복구한다.
     </details>
     <details close>
       <summary>6.4. Structured Streaming </summary>
+
+정형 스트리밍(structured streaming)의 핵심은 스트리밍 연산의 장애 내성과 일관성을 갖추는 데 필요한 세부 사항을 숨겨서 스트리밍 API를 마치 일괄 처리 API처럼 사용할 수 있게 하는 것이다. → 스파크 버전 2.0부터 도입됨.
+
+- **스트리밍 DataFrame 생성**: 스트리밍 DataFrame은 readStream을 호출해 생성한다. 이 메서드는 DataStreamReader를 반환하며 이는 연속으로 유입되는 스트림 데이터를 읽어들인다.
+
+    ```python
+    structStream = spark.readStream.text("ch06input")
+    structStream.isStreaming()  #True
+    structStream.explain()  #실행 계획 확인
+    #structStream은 지정된 입력 폴더를 모니터링하고 폴더 아래에 새로 생성된 파일들을 주기적으로 처리한다. 
+    ```
+
+- **스트리밍 데이터 출력**: `writeStream` 메서드를 사용해 스트리밍 연산을 시작한다. 여기에 빌더 패턴을 사용하여 DataStreamWriter를 설정할 수 있다. (즉, 다음 설정 함수들을 계속 이어붙일 수 있다.) 
+→ trigger, format, outputMode, option, foreach, queryName, append, complete
+→ 필요한 모든 설정을 지정한 후 마지막으로 start() 메서드를 호출해 스트리밍 계산을 시작할 수 있다.
+- **스트리밍 실행 관리**: start 메서드는 스트리밍 실행의 핸들과 같은 역할을 하는 StreamingQuery 객체를 반한한다. 이 객체로 스트리밍 실행을 관리할 수 있다.
+- **정형 스트리밍의 미래**
     </details>
   </blockquote>
 </details>  
@@ -2134,7 +2994,100 @@ Standalone 클러스터 모드에서는 스파크 셸을 시작하기 전에 클
 </details>  
 
 ## 4장 Bringing it together
+<details close>
+<summary><b>chapter 13</b> case study</summary><br>
+<blockquote>
+  <details close>
+    <summary>13.1. Understanding the use case</summary>
+    
+1. 예제 시나리오
+    - 실시간 대시보드: 센서 데이터, 리소스 사용 현황 데이터, 클릭스트림 데이터(사용자가 웹 사이트에 탐색한 흔적을 기록한 로그) 등을 시각화할 수 있다.
+    - 이 장에서는 접속 로그 파일의 형태로 유입되는 클릭스티림 데이터를 분석하고, 그 결과를 웹 페이지에 표시하는 **웹 통계 대시보드**를 구현한다. 애플리케이션은 접속 로그 파일을 수신하고, 초당 활성 사용자(active user) 세션 개수와 초당 요청(request) 횟수, 오류 발생 횟수, 광고 클릭 횟수를 계산한 후 이 모든 정보를 실시간 그래프로 그린다.
 
+        <img width="478" alt="Screen Shot 2021-07-29 at 6 00 52 PM" src="https://user-images.githubusercontent.com/43725183/127463721-27061e6a-e642-4c6e-9173-032aac71a8fe.png">
+
+        위쪽 그래프는 활성 사용자의 세션 개수를 보여주며, 아래 쪽 그래프는 초당 요청 횟수, 오류 발생 회수, 광고 클릭 횟수를 보여준다. 오른쪽 텍스트 영역에는 가장 최근에 입수한 메시지 100개가 출력되며, 이를 디버깅에 활용할 수 있다. 웹 페이지의 왼쪽 위에 위치한 stop 버튼은 메시지 입수를 시작하거나 중지하는 데 사용한다. 또 위쪽에 있는 버튼들을 눌러 그래프 시간 범위를 변경할 수도 있다. 
+
+    - 예제 데이터: date and time, IPaddress, sessionId, URL, method, respCode, duration
+
+        <img width="479" alt="Screen Shot 2021-07-29 at 6 01 08 PM" src="https://user-images.githubusercontent.com/43725183/127463753-4ff19ae2-84c5-4db8-8f40-486f74be1fc1.png">
+
+2. 예제 애플리케이션의 컴포넌트
+
+    <img width="511" alt="Screen Shot 2021-07-29 at 6 01 29 PM" src="https://user-images.githubusercontent.com/43725183/127463811-7ae2d95a-4dcd-4a29-906c-eedd11f68a26.png">
+
+    - **로그 시뮬레이터(Log simulator)**: 실습 환경에서는 실제 운영 중인 웹 사이트의 접속 로그를 확보할 수 없으므로 로그 시뮬레이터를 사용한다. 로그 시뮬레이터는 가상의 웹 사이트 URL을 방문한 사용자들의 접속 로그를 앞서 정의한 형식으로 생성하고, 카프카 토픽에 바로 전송한다. 
+    cf. 실제 웹 사이트의 클릭스트림 데이터를 다루려면 로그 파일을 수집하고 카프카로 전송할 방법이 필요한데, 아파치 플럼이 좋은 대안이 될 수 있다. 플럼은 tail -F 명령을 실행하고 그 결과를 카프카로 전송할 수 있다.
+    - **로그 분석 모듈(Log Analyzer)**: 로그 분석 모듈은 카프카에서 로그 데이터를 읽어 들인 후 예제 애플리케이션의 각종 통계를 계산하고, 계산 결과를 다시 카프카의 다른 토픽에 기록한다. 로그 분석 모듈이 계산하는 통계 결과는 두 번째 카프카 토픽에 전송되며, 메시지 형식은 `<timestamp>:(key->value,...)` 이다. 
+    cf. timestamp는 long타입의 숫자로, 1970년 1월 1일 0시 0분 0초부터 해당 통계가 기록된 시각 사이의 밀리초(millisecond) 수를 계산한 것이다.
+
+        <img width="474" alt="Screen Shot 2021-07-29 at 6 01 42 PM" src="https://user-images.githubusercontent.com/43725183/127463843-796069a8-93dd-4556-8f72-197a7f405b2a.png">
+
+        광고 통계를 계산할 때는 모든 광고 배너가 /ads/<ad_category>/<ad_id>/clickfw 형식의 URL과 연결되었다고 가정한다. 사용자가 광고를 클릭하면 브라우저는 이 URL로 먼저 이동해서 해당 광고의 클릭 이벤트를 기록한 후 광고 제휴 사이트로 다시 이동(redirect)한다. 
+
+    - **웹 통계 대시보드(Web stats dashboard)**: 카프카에서 통계 데이터를 가져온 후 웹 소켓으로 클라이언트 웹 브라우저에 전송한다. 그리고 D3.js 자바스크립트 라이브러리를 사용해 통계 데이터를 실시간 그래프에 표시한다. 웹 브라우저에서 실행하는 자바스크립트 코드는 실시간 메시지 순서가 뒤섞이지 않도록 타임 스탬프별로 통계 데이터를 집계해 정렬한다.
+  </details>
+  <details close>
+    <summary>13.2. Running the application</summary>
+    
+1. 가상 머신에서 애플리케이션 시작(생략)
+2. 애플리케이션을 수동으로 시작
+    1. 아카이브 내려받기: 각 컴포넌트의 프로젝트와 소스파일은 책의 깃허브 저장소에 있는 ch13 폴더에서 가져올 수 있다. → 로그 시뮬레이터, 로그 분석 모듈, 웹 통계 대시보드
+    2. 카프카 토픽 생성
+        - (1) 로그 이벤트를 저장할 카프카 토픽(weblogs)과 (2) 통계 데이터(stats)를 저장할 카프카 토픽을 생성해야 한다.
+        - start-kafka.sh 스크립트는 복제 계수를 1로 설정하고 각 토픽별로 파티션을 한 개만 사용했다. 다른 값을 사용하려면 다음과 같이 입력한다.(명령을 실행학 전에 먼저 주키퍼와 카프카를 시작해야 한다)
+
+            ```bash
+            $ kafka-topics.sh --create \
+            --topic <topic_name>
+            --replication-factor <repl_factor>
+            --partitions <num_partitions>
+            --zookeeper <zk_ip>:2181
+            ```
+
+    3. 로그 분석 모듈 시작
+        - 로그 분석 모듈의 잡은 일반 스파크 잡과 마찬가지로 spark-submit 명령에 StreamingLogAnalyzer 클래스를 지정해 시작한다. 애플리케이션 JAR 파일 뒤에 brokerList와 checkpointDir을 필수 인수로 전달해야 한다.
+            - brokerList: 카프카 설치 위치를 지정한다. 카프카 브로커의 IP 주소와 포트 번호를 입력하며, 브로커를 여러개 지정할 때는 각 브로커 주소를 쉼표로 구성한다.
+            - checkpointDir: 스파크의 체크포인트 데이터를 저장한 디렉터리 URL을 지정한다.
+        - 로그 분석 모듈을 제출하는 명령은 다음과 같다
+
+            ```bash
+            $ spark-submit --master <your_master_url> \
+            --class org.sia.loganalyzer.StreamingLogAnalyzer \
+            streaming-log-analyzer.jar -brokerList=<kafka_ip>:<kafka_port>
+            -checkpointDir=hdfs://<hdfs_host>:<hdfs_port>/<checkpoint_dir>
+            ```
+
+            추가로 다음 선택 매개변수를 지정할 수 있다.
+
+            - inputTopic: 로그 이벤트가 유입될 입력 토픽 이름
+            - outputTopic: 통계 데이터를 내보낼 출력 토픽 이름
+            - sessionTimeout: 세션 시간 초과를 판단하는 기준(단위: 초). 각 세션의 마지막 요청 시점부터 경과한 시간이 이 변수 값보다 크면 해당 세션이 종료되었다고 판단한다.
+            - numberPartitions: 통계 연산에 사용할 RDD 파티션 개수
+    4. 웹 통계 대시보드 시작
+        - 웹 통계 대시보드는 자바 웹 애플리케이션이므로 웹 소켓을 지원하는 모든 종류의 자바 애플리케이션 서버에서 실행할 수 있다. 어떤 종류의 서버를 사용하든 다음 두 가지 자바 시스템 변수를 반드시 지정해야 한다. (실습에서는 IBM 웹스피어 리버티 프로파일 서버 사용)
+            - zookeeper.address: 카프카에 접속하는 데 사용할 주키퍼의 호스트 네임과 포트 번호
+            - kafka.topic: 통계 메시지를 읽어들일 토픽 이름
+        - 웹 애플리케이션 접속 URL: 애플리케이션 서버 및 설치 방법에 따라 다르다. 따라서 URL이 정해지면 webstats.js 파일에 잇는 URL 또한 이에 맞추어서 바꾸어야 한다.
+        - 웹 통계 대시보드는 카프카에서 메시지를 가져와 그래프에 표시한다. 또 애플리케이션 서버의 시스템 출력 로그 파일에 메시지를 출력한다.
+    5. 로그 시뮬레이터 시작: 컴포넌트를 모두 실행했다면 이제 로그 시뮬레이터를 시작할 수 있다. 
+
+        ```bash
+        $ ./start-simulator.sh --brokerList=<kafka_host>:<kafka_port>
+        #별도의 카프카를 사용한 경우 위와 같이 카프카 주소를 전달해야 한다. 
+        ```
+  </details>
+    <details close>
+    <summary>13.3. Understanding the source code</summary>
+  </details>
+    </blockquote>
+      </details>    
+ <details close>
+  <summary><b>chapter 14</b> DL on spark with H2O</summary><br>
+  </details>    
+
+</details>
+      
 ### Appendix
 <details close>
 <summary><b>A. Installing Apache Spark</b></summary>
