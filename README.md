@@ -2,6 +2,11 @@
 참조 서적: Spark in Action (https://www.manning.com/books/spark-in-action) <br>
 참조 github: https://github.com/spark-in-action/first-edition
 <details close>
+  <summary> 스토리클럽 자료: <a href="https://github.com/lizzy723/Spark-in-action-study/blob/master/20210729_%EC%8A%A4%ED%86%A0%EB%A6%AC%ED%81%B4%EB%9F%BD.pdf"> 왜 우리는 hail을 사용해야 하는가?</a> </summary>
+    <img width="513" alt="슬라이드 첫 두장" src="https://user-images.githubusercontent.com/43725183/127468776-a5d07b08-689f-4b4f-b363-5507c98ece1f.png">
+
+</details>
+<details close>
 <summary>Original readme</summary>
   <h1>Spark in Action book repository</h1>
   <h4> Current edition: Manning Early Access Program (MEAP)</h4>
